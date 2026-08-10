@@ -91,8 +91,8 @@ https://www.googleapis.com/auth/userinfo.profile,openid"
 ```
 
 `gmail.modify` is required for mark-as-read; the userinfo scopes let the app
-auto-detect your email. (If you use the `databricks_fm` backend or MLflow
-tracking, you'll also be prompted to `databricks auth login`.)
+auto-detect your email. (If you use the `databricks_fm` backend, you'll also be
+prompted to `databricks auth login`.)
 
 ## Run
 
@@ -135,8 +135,7 @@ All optional — sensible defaults are baked in. Set via env vars (see `.env.exa
 | `CLEANUP_THREAD_BATCH_SIZE` | `30` | Threads per run |
 | `CLEANUP_PER_MSG_BODY_CHARS` | `6000` | Per-message body cap in the transcript |
 | `GMAIL_QUOTA_PROJECT` | _(none)_ | GCP project for Gmail API quota; set only if you hit a quota error |
-| `CLEANUP_DATABRICKS_PROFILE` | `DEFAULT` | Databricks CLI profile — for `databricks_fm` and MLflow |
-| `MLFLOW_EXPERIMENT` | _(blank)_ | Databricks MLflow experiment path; blank = tracking off |
+| `CLEANUP_DATABRICKS_PROFILE` | `DEFAULT` | Databricks CLI profile — only for `databricks_fm` |
 
 ## Classification caching
 
@@ -148,13 +147,6 @@ decision is reused instead of calling Claude again; as soon as a thread gets a
 new reply, its fingerprint changes and it's re-classified. Clear the cache from
 the sidebar to force a full re-classification.
 
-## Optional: MLflow run tracking
-
-If you set `MLFLOW_EXPERIMENT` to a Databricks experiment path, each run logs
-token usage and per-thread decisions as an MLflow trace. It's entirely
-best-effort — an auth failure never crashes a run, and leaving `MLFLOW_EXPERIMENT`
-unset disables it completely.
-
 ## Project layout
 
 | File | Role |
@@ -164,7 +156,6 @@ unset disables it completely.
 | `quick_triage.py` | Fast rule-based pre-pass; skips Claude for obvious noise |
 | `gmail_client.py` | Gmail REST — threads + mark-as-read (no move/delete) |
 | `decision_cache.py` | Caches decisions keyed by thread message-ids |
-| `mlflow_tracking.py` | Optional MLflow trace logging |
 | `models.py` | `ThreadMessage`, `EmailThread`, `ThreadDecision` |
 | `config.py` | Env-driven settings |
 | `start.sh` / `reauth.sh` | Auth refresh + launch helpers |

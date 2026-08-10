@@ -1,10 +1,16 @@
-"""Classify inbox threads using Claude.
+"""Classify inbox threads using Claude, and extract action items from transcripts.
 
 Each thread is evaluated as a whole conversation: Claude reads the full
 transcript (every message, full bodies) and decides, from the point of view of
 the account owner (set via CLEANUP_USER_NAME), whether the thread needs a response,
 whether it carries a concrete action on the owner, whether it's customer-related
 or purely internal, and which UI bucket it belongs in.
+
+Additionally exposes:
+  - extract_actions_from_transcript(text, roster, workstreams, settings) → list[dict]
+    Extracts action items from a meeting transcript or notes.
+  - thread_decision_to_task(decision, thread, settings) → Task | None
+    Bridge: converts an action_required ThreadDecision into a Task for the board.
 
 Backends (see config.py):
   - "claude_cli"    : Claude Agent SDK (Claude Code SDK) driving the local
@@ -18,9 +24,12 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 import re
 
 from models import EmailThread, ThreadDecision, CATEGORIES, CATEGORY_OTHER
+
+log = logging.getLogger(__name__)
 
 
 def _system_prompt(settings: dict) -> str:
@@ -260,16 +269,6 @@ def classify_thread(thread: EmailThread, settings: dict,
     else:
         decision = _coerce(raw, thread)
 
-    # Log span to active MLflow run if one is open (best-effort, never raises).
-    try:
-        import mlflow
-        if mlflow.active_run():
-            from mlflow_tracking import log_thread_span
-            log_thread_span(thread, decision, in_tok, out_tok, cost,
-                            quick_triaged=False)
-    except Exception:
-        pass
-
     return decision
 
 
@@ -311,18 +310,6 @@ def classify_threads(threads: list[EmailThread], settings: dict,
                 needs_claude.append(th)
 
     instant_count = len(decisions)
-    needs_claude_ids = {th.thread_id for th in needs_claude}
-
-    # Log quick-triaged + cache-hit spans to MLflow (best-effort).
-    try:
-        import mlflow
-        if mlflow.active_run():
-            from mlflow_tracking import log_thread_span
-            for th in threads:
-                if th.thread_id in decisions and th.thread_id not in needs_claude_ids:
-                    log_thread_span(th, decisions[th.thread_id], quick_triaged=True)
-    except Exception:
-        pass
 
     if progress:
         progress(instant_count, len(threads), instant_count, 0)
@@ -338,3 +325,214 @@ def classify_threads(threads: list[EmailThread], settings: dict,
 
     # Return in original order.
     return [decisions[th.thread_id] for th in threads], stats
+
+
+# ── transcript action extraction ─────────────────────────────────────────────
+
+def _extract_json_array(text: str) -> list:
+    """Pull the first top-level JSON array out of the model's reply.
+
+    Mirrors _extract_json_object but expects a `[...]` root rather than `{...}`.
+    Returns [] on any parse failure so callers always get a list.
+    """
+    try:
+        val = json.loads(text.strip())
+        if isinstance(val, list):
+            return val
+    except Exception:
+        pass
+
+    # Fenced code block
+    fenced = re.search(r"```(?:json)?\s*(\[.*?\])\s*```", text, re.DOTALL)
+    if fenced:
+        try:
+            val = json.loads(fenced.group(1))
+            if isinstance(val, list):
+                return val
+        except Exception:
+            pass
+
+    # Bare array anywhere in the text
+    start = text.find("[")
+    end = text.rfind("]")
+    if start != -1 and end != -1 and end > start:
+        try:
+            val = json.loads(text[start:end + 1])
+            if isinstance(val, list):
+                return val
+        except Exception:
+            pass
+
+    return []
+
+
+def _action_system_prompt(name: str, roster: list[str], workstreams: list[str]) -> str:
+    roster_str = ", ".join(roster) if roster else "unknown"
+    ws_str = ", ".join(workstreams) if workstreams else "unassigned"
+    return (
+        f"You are an action-item extractor for {name}. "
+        "Given a meeting transcript or notes, identify every concrete commitment, "
+        "decision, or task that requires follow-up by someone on the team. "
+        "For each item, determine:\n"
+        f"- \"assignee\": match the responsible person's name against the roster "
+        f"({roster_str}), or use \"unknown\" if unclear.\n"
+        f"- \"workstream\": suggest the best matching workstream from "
+        f"({ws_str}), or use \"unassigned\" if it doesn't fit.\n"
+        "- \"action\": state the task as one concise imperative sentence.\n"
+        "- \"due_date\": ISO date string (YYYY-MM-DD) if a deadline is mentioned, "
+        "otherwise null.\n"
+        "- \"context\": 1–2 sentences quoted or paraphrased from the transcript "
+        "that support the action item.\n\n"
+        "Rules:\n"
+        "- Only include items with a real follow-up obligation — not general "
+        "discussion points.\n"
+        "- If no action items exist, return an empty array.\n"
+        "- Ambiguous assignees land in \"unknown\" rather than being guessed.\n"
+        "- Ambiguous workstreams land in \"unassigned\" rather than being guessed.\n\n"
+        "Return ONLY a JSON array; no surrounding text, no markdown prose:\n"
+        '[{"assignee":"...","workstream":"...","action":"...","due_date":null,'
+        '"context":"..."}, ...]'
+    )
+
+
+def _action_user_prompt(text: str, per_msg_body_chars: int) -> str:
+    # Allow larger transcripts than individual email bodies (5x per-msg cap).
+    cap = per_msg_body_chars * 5
+    snippet = text[:cap]
+    if len(text) > cap:
+        snippet += f"\n\n[transcript truncated at {cap} chars]"
+    return (
+        "Extract all action items from the following transcript. "
+        "Return the JSON array only.\n\n"
+        + snippet
+    )
+
+
+def extract_actions_from_transcript(
+    text: str,
+    roster: list[str],
+    workstreams: list[str],
+    settings: dict,
+) -> list[dict]:
+    """Extract action items from a meeting transcript or notes.
+
+    Args:
+        text:        Raw transcript text (Meet auto-notes, Teams export, .txt, etc.).
+        roster:      List of team member names for assignee matching.
+                     Derive from config via [r["name"] for r in TEAM_ROSTER].
+        workstreams: List of known workstream names for classification.
+        settings:    The app settings dict from config.get_settings().
+
+    Returns a list of dicts, each with keys:
+        assignee   — matched roster name or "unknown"
+        workstream — matched workstream or "unassigned"
+        action     — imperative sentence describing the task
+        due_date   — "YYYY-MM-DD" string or null
+        context    — 1–2 sentence excerpt providing context
+
+    Never raises — returns [] on any error (safe default).
+    Auth-like errors are re-raised so the caller can surface them to the user.
+    """
+    if not text or not text.strip():
+        return []
+
+    name = settings.get("user_name") or settings.get("user_email") or "the account owner"
+    system = _action_system_prompt(name, roster, workstreams)
+    user = _action_user_prompt(text, settings.get("per_msg_body_chars", 6000))
+    backend = settings.get("backend", "claude_cli")
+    model = settings.get("model", "")
+
+    try:
+        if backend == "databricks_fm":
+            raw_text, _, _, _ = _via_databricks_fm(
+                system, user, model, settings["databricks_profile"]
+            )
+        elif backend == "anthropic_api":
+            key = settings.get("anthropic_api_key")
+            if not key:
+                raise RuntimeError(
+                    "CLEANUP_BACKEND=anthropic_api but ANTHROPIC_API_KEY is not set."
+                )
+            raw_text, _, _, _ = _via_anthropic(system, user, model, key)
+        else:  # claude_cli (default)
+            raw_text, _, _, _ = asyncio.run(_via_cli(system, user, model))
+    except Exception as exc:
+        msg = str(exc)
+        if any(k in type(exc).__name__ + msg for k in
+               ("Auth", "401", "403", "Permission", "Credential", "Unauthorized")):
+            raise
+        log.warning(
+            "extract_actions_from_transcript: backend error (%s: %s) — returning [].",
+            type(exc).__name__, msg,
+        )
+        return []
+
+    items = _extract_json_array(raw_text)
+    if not items:
+        log.warning(
+            "extract_actions_from_transcript: could not parse action array from "
+            "model reply — returning []."
+        )
+        return []
+
+    # Normalise each item: enforce required keys and safe defaults.
+    cleaned: list[dict] = []
+    for item in items:
+        if not isinstance(item, dict):
+            continue
+        action_text = str(item.get("action") or "").strip()
+        if not action_text:
+            continue  # Skip items without a real action text
+        cleaned.append({
+            "assignee":   str(item.get("assignee") or "unknown").strip() or "unknown",
+            "workstream": str(item.get("workstream") or "unassigned").strip() or "unassigned",
+            "action":     action_text,
+            "due_date":   item.get("due_date"),   # None or "YYYY-MM-DD" string
+            "context":    str(item.get("context") or "").strip(),
+        })
+    return cleaned
+
+
+# ── email → Task bridge ───────────────────────────────────────────────────────
+
+def thread_decision_to_task(
+    decision: "ThreadDecision",
+    thread: "EmailThread",
+    settings: dict,
+) -> "Task | None":
+    """Convert an action_required ThreadDecision into a Task for the board.
+
+    Returns None if the decision is not action_required or has no action_on_me.
+    Does NOT persist the task — the caller is responsible for calling
+    task_store.add(task) after dedup-checking via task_store.find_by_source().
+
+    The Task is built via task_store.new_task() so it gets a UUID + timestamps.
+    Assignee is always the account owner (Hanna), since action_on_me means it's
+    her action. Workstream defaults to "unassigned" for manual classification on
+    the board.
+    """
+    if decision.category != "action_required" or not decision.action_on_me:
+        return None
+
+    from task_store import new_task  # deferred import to avoid circular at module load
+
+    assignee = (
+        settings.get("user_name")
+        or settings.get("user_email")
+        or "Hanna"
+    )
+    thread_id = decision.thread_id
+    source_link = f"https://mail.google.com/mail/u/0/#inbox/{thread_id}"
+
+    return new_task(
+        title=decision.action_on_me,
+        assignee=assignee,
+        workstream="unassigned",
+        status="todo",
+        source="email",
+        source_ref=thread_id,
+        source_link=source_link,
+        context=decision.summary or "",
+        customer_related=decision.customer_related,
+        confidence=decision.confidence,
+    )

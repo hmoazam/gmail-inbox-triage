@@ -169,6 +169,61 @@ class GmailClient:
                 progress(i, len(thread_ids))
         return out
 
+    # --- draft creation (draft-first; no send) ---------------------------------
+    def create_draft(
+        self,
+        to: str,
+        subject: str,
+        body: str,
+        thread_id: str | None = None,
+        cc: str | None = None,
+    ) -> str:
+        """Create a Gmail draft and return the draft id string.
+
+        DRAFT-FIRST: this is the ONLY outbound action this client supports.
+        There is deliberately no send_message — the app never sends mail directly.
+        The user reviews and sends from Gmail after the draft is created.
+
+        Args:
+            to:        Recipient address. Must be non-empty — raises ValueError
+                       if blank (guards against roster entries with no email).
+            subject:   Email subject line.
+            body:      Plain-text email body.
+            thread_id: Optional Gmail thread id to attach the draft to.
+            cc:        Optional CC address or comma-separated list.
+
+        Returns the draft id string (the "id" field from the API response).
+        Raises AuthError on 401/403.
+        Raises ValueError if `to` is empty or whitespace-only.
+        """
+        import base64
+        from email.mime.text import MIMEText
+
+        if not (to or "").strip():
+            raise ValueError(
+                "create_draft: 'to' address is empty. "
+                "Check that the recipient has an email configured in the team roster."
+            )
+
+        msg = MIMEText(body, "plain", "utf-8")
+        msg["To"] = to
+        msg["Subject"] = subject
+        if cc:
+            msg["Cc"] = cc
+
+        raw = base64.urlsafe_b64encode(msg.as_bytes()).decode("ascii")
+        payload: dict = {"message": {"raw": raw}}
+        if thread_id:
+            payload["message"]["threadId"] = thread_id
+
+        r = self._check(requests.post(
+            f"{API}/drafts",
+            headers=self._headers(json_body=True),
+            json=payload,
+            timeout=30,
+        ))
+        return r.json()["id"]
+
     # --- the one mutation: mark as read -------------------------------------
     def mark_read(self, message_ids: list[str]) -> None:
         """Remove UNREAD from the given messages (batch). The only write op."""

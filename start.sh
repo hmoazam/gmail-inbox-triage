@@ -15,9 +15,14 @@ gcloud auth application-default print-access-token &>/dev/null \
   && echo "  ✓ Google auth is valid" \
   || {
     echo "  Token missing or expired — starting login flow..."
+    # NOTE: If the token is valid but was issued before the Drive/gmail.send
+    # scopes were added, run ./reauth.sh once to grant them.
     gcloud auth application-default login \
       --scopes="https://www.googleapis.com/auth/gmail.modify,\
 https://www.googleapis.com/auth/gmail.settings.basic,\
+https://www.googleapis.com/auth/gmail.send,\
+https://www.googleapis.com/auth/drive.file,\
+https://www.googleapis.com/auth/drive.readonly,\
 https://www.googleapis.com/auth/cloud-platform,\
 https://www.googleapis.com/auth/userinfo.email,\
 https://www.googleapis.com/auth/userinfo.profile,\

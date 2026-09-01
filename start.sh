@@ -6,6 +6,17 @@
 set -e
 cd "$(dirname "$0")"
 
+# ── 0. Load .env ────────────────────────────────────────────────────────────
+# The Python code reads config only from os.environ (no dotenv), and .env uses
+# `export` lines — so we must source it here or GMAIL_QUOTA_PROJECT and friends
+# never reach the app. Without the quota project, Gmail API returns 403.
+if [ -f .env ]; then
+  set -a
+  # shellcheck disable=SC1091
+  source .env
+  set +a
+fi
+
 # Databricks CLI profile used only when CLEANUP_BACKEND=databricks_fm.
 DATABRICKS_PROFILE="${CLEANUP_DATABRICKS_PROFILE:-DEFAULT}"
 

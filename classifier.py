@@ -25,6 +25,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import os
 import re
 
 from models import EmailThread, ThreadDecision, CATEGORIES, CATEGORY_OTHER
@@ -175,6 +176,16 @@ class UsageStats:
 async def _via_cli(system: str, user: str, model: str) -> tuple[str, int, int, float | None]:
     from claude_agent_sdk import query, ClaudeAgentOptions
     from claude_agent_sdk.types import AssistantMessage, TextBlock, ResultMessage
+
+    # The claude_cli backend authenticates through the user's claude.ai login,
+    # not an API key. If ANTHROPIC_API_KEY / ANTHROPIC_AUTH_TOKEN are present in
+    # the environment (commonly exported from a shell profile), the spawned
+    # `claude` CLI uses them instead of the login and prints:
+    #   "claude.ai connectors are disabled because ANTHROPIC_API_KEY ... is set"
+    # The SDK builds the child env as {**os.environ, **options.env}, a merge that
+    # can't *unset* an inherited key — so we drop them from os.environ here.
+    for _auth_var in ("ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN"):
+        os.environ.pop(_auth_var, None)
 
     opts: dict = {"system_prompt": system, "max_turns": 1, "allowed_tools": []}
     if model:

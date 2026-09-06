@@ -19,7 +19,7 @@ from fastapi.staticfiles import StaticFiles
 
 from gmail_client import AuthError as GmailAuthError
 from drive_client import AuthError as DriveAuthError
-from api.routes import drafts, ingest, tags, tasks, triage, workstreams
+from api.routes import drafts, ingest, roster, tags, tasks, triage, workstreams
 
 # Vite dev server origins (localhost and 127.0.0.1 forms).
 DEV_ORIGINS = [
@@ -60,6 +60,7 @@ async def _drive_auth_handler(_request: Request, exc: DriveAuthError) -> JSONRes
 # --- API routes -------------------------------------------------------------
 
 app.include_router(tasks.router)
+app.include_router(roster.router)
 app.include_router(workstreams.router)
 app.include_router(tags.router)
 app.include_router(triage.router)

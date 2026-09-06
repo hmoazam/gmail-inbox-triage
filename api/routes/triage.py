@@ -60,6 +60,7 @@ def triage(
             message_count=len(t.messages),
             unread=t.unread,
             unsubscribe=t.unsubscribe,
+            source_link=f"https://mail.google.com/mail/u/0/#inbox/{t.thread_id}",
             messages=[
                 ThreadMessageOut(
                     id=m.id, sender=m.sender, sender_email=m.sender_email,

@@ -161,6 +161,7 @@ class TriageThreadOut(BaseModel):
     message_count: int
     unread: bool
     unsubscribe: str | None = None
+    source_link: str          # Gmail thread URL
     messages: list[ThreadMessageOut]
     decision: ThreadDecisionOut
 
@@ -224,12 +225,33 @@ class IngestResult(BaseModel):
 # ---------------------------------------------------------------------------
 
 class DraftCreate(BaseModel):
-    to: str
-    subject: str
-    body: str
+    """Draft input — accepts EITHER shape:
+
+    - task-based: ``{"task_id": "..."}`` — the Send action on a teammate task;
+      the route resolves the assignee's email, subject, body, and thread from
+      the stored Task.
+    - generic:    ``{"to", "subject", "body", "thread_id"?, "cc"?}`` — a
+      fully-specified draft.
+
+    All fields are optional so one model covers both; the route validates that
+    exactly one shape is supplied.
+    """
+    task_id: str | None = None
+    to: str | None = None
+    subject: str | None = None
+    body: str | None = None
     thread_id: str | None = None
     cc: str | None = None
 
 
 class DraftResponse(BaseModel):
     draft_id: str
+
+
+# ---------------------------------------------------------------------------
+# Roster (read-only; drives By-Person lanes + the assignee dropdown)
+# ---------------------------------------------------------------------------
+
+class RosterEntry(BaseModel):
+    name: str
+    email: str

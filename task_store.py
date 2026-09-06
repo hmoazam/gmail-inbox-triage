@@ -81,6 +81,7 @@ def new_task(
     customer_related: bool = False,
     confidence: float = 0.0,
     completed_at=None,
+    tags: list[str] | None = None,
 ) -> Task:
     """Construct a ``Task`` with a fresh UUID and now-timestamps.
 
@@ -103,6 +104,7 @@ def new_task(
         customer_related=customer_related,
         confidence=confidence,
         completed_at=completed_at,
+        tags=list(tags) if tags else [],
     )
 
 
@@ -175,8 +177,12 @@ def list_tasks(
     assignee: str | None = None,
     workstream: str | None = None,
     status: str | None = None,
+    tags: list[str] | None = None,
 ) -> list[Task]:
     """Return all tasks matching every supplied filter (``None`` = any).
+
+    ``tags`` matches tasks that contain **all** of the requested tags (AND
+    semantics); an empty list matches everything.
 
     Results are ordered by ``created_at`` descending (newest first).
     """
@@ -192,6 +198,8 @@ def list_tasks(
         if workstream is not None and task.workstream != workstream:
             continue
         if status is not None and task.status != status:
+            continue
+        if tags and not all(tag in task.tags for tag in tags):
             continue
         tasks.append(task)
 

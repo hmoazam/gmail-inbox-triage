@@ -131,6 +131,12 @@ class Task:
     customer_related: bool = False
     confidence: float = 0.0            # 0.0–1.0; set by classifier, 0 for manual
     completed_at: datetime | None = None  # set when status flips to "done"
+    tags: list[str] = field(default_factory=list)  # free-form colored labels
+
+    # ``tags`` needs no special handling in as_dict/from_dict: ``asdict`` already
+    # serialises the list, and ``from_dict`` (``cls(**d)``) falls back to the
+    # default_factory when a stored task predates tags — so existing tasks with
+    # no "tags" key load as ``[]`` (backward compatible, no migration).
 
     @property
     def overdue(self) -> bool:

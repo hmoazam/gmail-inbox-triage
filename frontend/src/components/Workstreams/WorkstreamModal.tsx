@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { api } from "../../api/client";
-import { ApiError } from "../../types";
+import { ApiError, type WorkstreamMutationResult } from "../../types";
 
 interface Props {
   workstreams: string[];
@@ -14,13 +14,21 @@ export function WorkstreamModal({ workstreams, onClose, onChanged }: Props) {
   const [newName, setNewName] = useState("");
   const [edits, setEdits] = useState<Record<string, string>>({});
   const [error, setError] = useState<string | null>(null);
+  const [status, setStatus] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
 
-  const run = async (fn: () => Promise<unknown>) => {
+  const run = async (fn: () => Promise<WorkstreamMutationResult | undefined>) => {
     setBusy(true);
     setError(null);
     try {
-      await fn();
+      const result = await fn();
+      // Surface how many tasks the rename/delete cascaded onto.
+      if (result && result.tasks_updated > 0) {
+        const n = result.tasks_updated;
+        setStatus(`${n} task${n === 1 ? "" : "s"} updated.`);
+      } else {
+        setStatus(null);
+      }
       onChanged();
     } catch (err) {
       setError(err instanceof ApiError ? err.message : "Operation failed");
@@ -33,8 +41,9 @@ export function WorkstreamModal({ workstreams, onClose, onChanged }: Props) {
     const name = newName.trim();
     if (!name) return;
     void run(async () => {
-      await api.createWorkstream(name);
+      const r = await api.createWorkstream(name);
       setNewName("");
+      return r;
     });
   };
 
@@ -46,6 +55,7 @@ export function WorkstreamModal({ workstreams, onClose, onChanged }: Props) {
         </button>
         <h2>🏷️ Manage workstreams</h2>
         {error && <div className="banner banner-error">{error}</div>}
+        {status && <p className="muted">{status}</p>}
 
         <div className="row">
           <input
@@ -75,7 +85,8 @@ export function WorkstreamModal({ workstreams, onClose, onChanged }: Props) {
               onClick={() =>
                 run(async () => {
                   const target = (edits[ws] ?? ws).trim();
-                  if (target && target !== ws) await api.renameWorkstream(ws, target);
+                  if (target && target !== ws) return await api.renameWorkstream(ws, target);
+                  return undefined;
                 })
               }
             >
@@ -87,8 +98,9 @@ export function WorkstreamModal({ workstreams, onClose, onChanged }: Props) {
               onClick={() =>
                 run(async () => {
                   if (confirm(`Delete "${ws}"? Its tasks move to unassigned.`)) {
-                    await api.deleteWorkstream(ws);
+                    return await api.deleteWorkstream(ws);
                   }
+                  return undefined;
                 })
               }
             >

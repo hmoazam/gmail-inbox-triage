@@ -5,9 +5,11 @@
 import {
   ApiError,
   type AddToBoardRequest,
+  type AddToBoardResponse,
   type DraftRequest,
   type DraftResponse,
   type MarkReadRequest,
+  type RosterMember,
   type Tag,
   type TagCreate,
   type TagPatch,
@@ -17,14 +19,17 @@ import {
   type TaskSource,
   type TaskStatus,
   type TriageResponse,
+  type WorkstreamMutationResult,
 } from "../types";
 
 const BASE = "/api";
 
+type QueryValue = string | number | boolean | undefined | null | string[];
+
 interface RequestOptions {
   method?: string;
   body?: unknown;
-  query?: Record<string, string | number | boolean | undefined | null>;
+  query?: Record<string, QueryValue>;
 }
 
 function buildUrl(path: string, query?: RequestOptions["query"]): string {
@@ -32,7 +37,11 @@ function buildUrl(path: string, query?: RequestOptions["query"]): string {
   if (!query) return url;
   const params = new URLSearchParams();
   for (const [key, value] of Object.entries(query)) {
-    if (value !== undefined && value !== null && value !== "") {
+    if (value === undefined || value === null || value === "") continue;
+    if (Array.isArray(value)) {
+      // Repeated params: ?tags=a&tags=b (match-all on the backend).
+      for (const v of value) params.append(key, String(v));
+    } else {
       params.append(key, String(value));
     }
   }
@@ -114,8 +123,8 @@ export const api = {
         workstream: params.workstream,
         status: params.status,
         source: params.source,
-        // Backend accepts repeated ?tags= or a comma list; send comma list.
-        tags: params.tags && params.tags.length ? params.tags.join(",") : undefined,
+        // Repeated params: ?tags=a&tags=b (match-all).
+        tags: params.tags && params.tags.length ? params.tags : undefined,
       },
     });
   },
@@ -141,19 +150,21 @@ export const api = {
     return request<string[]>("/workstreams");
   },
 
-  createWorkstream(name: string): Promise<string[]> {
-    return request<string[]>("/workstreams", { method: "POST", body: { name } });
+  createWorkstream(name: string): Promise<WorkstreamMutationResult> {
+    return request<WorkstreamMutationResult>("/workstreams", { method: "POST", body: { name } });
   },
 
-  renameWorkstream(name: string, newName: string): Promise<string[]> {
-    return request<string[]>(`/workstreams/${encodeURIComponent(name)}`, {
+  renameWorkstream(name: string, newName: string): Promise<WorkstreamMutationResult> {
+    return request<WorkstreamMutationResult>(`/workstreams/${encodeURIComponent(name)}`, {
       method: "PATCH",
       body: { name: newName },
     });
   },
 
-  deleteWorkstream(name: string): Promise<string[]> {
-    return request<string[]>(`/workstreams/${encodeURIComponent(name)}`, { method: "DELETE" });
+  deleteWorkstream(name: string): Promise<WorkstreamMutationResult> {
+    return request<WorkstreamMutationResult>(`/workstreams/${encodeURIComponent(name)}`, {
+      method: "DELETE",
+    });
   },
 
   // --- Tags ---
@@ -184,8 +195,8 @@ export const api = {
     return request<{ marked: number }>("/triage/mark-read", { method: "POST", body });
   },
 
-  addToBoard(body: AddToBoardRequest): Promise<Task> {
-    return request<Task>("/triage/add-to-board", { method: "POST", body });
+  addToBoard(body: AddToBoardRequest): Promise<AddToBoardResponse> {
+    return request<AddToBoardResponse>("/triage/add-to-board", { method: "POST", body });
   },
 
   // --- Drafts (draft-first "send" for teammate tasks) ---
@@ -202,11 +213,10 @@ export const api = {
     return request<{ added: number }>("/ingest/transcripts", { method: "POST", body: {} });
   },
 
-  // --- Roster (ASSUMPTION: not in the documented contract) ---
-  // Frontend needs the roster for the assignee dropdown and empty By-Person
-  // lanes. If the backend exposes GET /api/roster this uses it; callers fall
-  // back to a constant on failure (see useRoster).
-  getRoster(): Promise<string[]> {
-    return request<string[]>("/roster");
+  // --- Roster ---
+  // GET /api/roster → [{ name, email }]. Used for By-Person lanes and the
+  // assignee dropdown; callers fall back to a constant on failure.
+  getRoster(): Promise<RosterMember[]> {
+    return request<RosterMember[]>("/roster");
   },
 };

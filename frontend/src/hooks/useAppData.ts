@@ -69,10 +69,11 @@ export function useAppData(): AppData {
   }, [handleErr]);
 
   const refreshRoster = useCallback(async () => {
-    // Optional endpoint; fall back to the constant silently if absent.
+    // GET /api/roster → [{name, email}]; map to names. Fall back on failure.
     try {
-      const r = await api.getRoster();
-      if (Array.isArray(r) && r.length) setRoster(r);
+      const members = await api.getRoster();
+      const names = members.map((m) => m.name).filter(Boolean);
+      if (names.length) setRoster(names);
     } catch {
       /* keep fallback */
     }

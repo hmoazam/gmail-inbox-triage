@@ -7,7 +7,6 @@ import {
   type TriageCategory,
   type TriageThread,
 } from "../../types";
-import { ME } from "../../constants";
 
 interface Props {
   /** Surface a Google-auth-expired message verbatim in the global banner. */
@@ -72,9 +71,13 @@ export function Triage({ onAuth, onAddedToBoard }: Props) {
 
   const markSelectedRead = async () => {
     if (selected.size === 0) return;
-    const ids = Array.from(selected);
+    // mark-read takes Gmail MESSAGE ids — gather them from selected threads.
+    const messageIds = threads
+      .filter((t) => selected.has(t.thread_id))
+      .flatMap((t) => t.messages.map((m) => m.id));
+    if (messageIds.length === 0) return;
     try {
-      await api.markRead({ thread_ids: ids });
+      await api.markRead({ message_ids: messageIds });
       // Drop the marked threads from view.
       setThreads((prev) => prev.filter((t) => !selected.has(t.thread_id)));
       setSelected(new Set());
@@ -84,16 +87,28 @@ export function Triage({ onAuth, onAddedToBoard }: Props) {
   };
 
   const addToBoard = async (t: TriageThread) => {
+    const d = t.decision;
     try {
-      await api.addToBoard({ thread_id: t.thread_id, assignee: ME });
+      // add-to-board carries the thread's decision fields; returns {created, task}.
+      const res = await api.addToBoard({
+        thread_id: t.thread_id,
+        category: d.category,
+        summary: d.summary,
+        action_on_me: d.action_on_me,
+        customer_related: d.customer_related,
+        internal_only: d.internal_only,
+        needs_response: d.needs_response,
+        confidence: d.confidence,
+      });
+      // created:false means it was already on the board — still a success no-op.
       setAdded((prev) => new Set(prev).add(t.thread_id));
-      onAddedToBoard();
+      if (res.created) onAddedToBoard();
     } catch (err) {
       handleErr(err);
     }
   };
 
-  const byCategory = (c: TriageCategory) => threads.filter((t) => t.category === c);
+  const byCategory = (c: TriageCategory) => threads.filter((t) => t.decision.category === c);
 
   return (
     <div className="triage">
@@ -168,25 +183,30 @@ export function Triage({ onAuth, onAddedToBoard }: Props) {
                       {t.unread ? "🔵 " : ""}
                       {t.subject || "(no subject)"}
                     </div>
-                    {t.participants.length > 0 && (
-                      <div className="muted" style={{ fontSize: 12 }}>
-                        {t.participants.slice(0, 4).join(", ")}
-                        {t.participants.length > 4 ? ` +${t.participants.length - 4}` : ""}
-                      </div>
+                    <div className="muted" style={{ fontSize: 12 }}>
+                      {t.participants.slice(0, 4).join(", ")}
+                      {t.participants.length > 4 ? ` +${t.participants.length - 4}` : ""}
+                      {t.message_count > 0
+                        ? `${t.participants.length ? "  ·  " : ""}${t.message_count} msg${
+                            t.message_count === 1 ? "" : "s"
+                          }`
+                        : ""}
+                    </div>
+                    {cat === "action_required" && t.decision.action_on_me && (
+                      <div className="thread-action">🚨 Action: {t.decision.action_on_me}</div>
                     )}
-                    {cat === "action_required" && t.action_on_me && (
-                      <div className="thread-action">🚨 Action: {t.action_on_me}</div>
-                    )}
-                    {t.summary && (
+                    {t.decision.summary && (
                       <div className="thread-summary">
-                        💬 {t.summary}
-                        {t.confidence ? `  ·  ${Math.round(t.confidence * 100)}%` : ""}
+                        💬 {t.decision.summary}
+                        {t.decision.confidence
+                          ? `  ·  ${Math.round(t.decision.confidence * 100)}%`
+                          : ""}
                       </div>
                     )}
                     <div className="card-meta">
-                      {t.customer_related && <span className="badge">🧑‍💼 Customer</span>}
-                      {t.internal_only && <span className="badge">🏢 Internal</span>}
-                      {t.needs_response && <span className="badge">↩️ Needs response</span>}
+                      {t.decision.customer_related && <span className="badge">🧑‍💼 Customer</span>}
+                      {t.decision.internal_only && <span className="badge">🏢 Internal</span>}
+                      {t.decision.needs_response && <span className="badge">↩️ Needs response</span>}
                       {t.source_link && (
                         <a
                           className="card-link"
@@ -216,13 +236,18 @@ export function Triage({ onAuth, onAddedToBoard }: Props) {
                     >
                       {expanded.has(t.thread_id) ? "Hide" : "Read thread"}
                     </button>
-                    {expanded.has(t.thread_id) && (
-                      <div className="thread-preview">
-                        {t.last_message_from ? `From: ${t.last_message_from}\n` : ""}
-                        {t.last_message_date ? `Date: ${t.last_message_date}\n\n` : ""}
-                        {t.summary || "No preview available."}
-                      </div>
-                    )}
+                    {expanded.has(t.thread_id) &&
+                      (() => {
+                        // Derive last-message from/date from messages[].
+                        const last = t.messages[t.messages.length - 1];
+                        return (
+                          <div className="thread-preview">
+                            {last?.from ? `From: ${last.from}\n` : ""}
+                            {last?.date ? `Date: ${last.date}\n\n` : ""}
+                            {t.decision.summary || "No preview available."}
+                          </div>
+                        );
+                      })()}
                   </div>
                 </div>
               ))}

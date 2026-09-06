@@ -98,14 +98,9 @@ export interface TagPatch {
   color?: string;
 }
 
-/**
- * One thread returned by GET /api/triage. Combines the EmailThread summary with
- * its ThreadDecision classification (models.py). The backend joins these; exact
- * field set is an ASSUMPTION to confirm with the backend teammate.
- */
-export interface TriageThread {
-  thread_id: string;
-  subject: string;
+/** Classifier output for one thread — NESTED under thread.decision (models.py). */
+export interface ThreadDecision {
+  thread_id?: string;
   category: TriageCategory;
   summary: string; // one-line why / what it is
   action_on_me: string | null; // concrete action for the account owner
@@ -113,29 +108,70 @@ export interface TriageThread {
   internal_only: boolean;
   needs_response: boolean;
   confidence: number;
+}
+
+/** One message within a triage thread (subset used by the UI). */
+export interface TriageMessage {
+  id: string;
+  from?: string | null; // sender display, if supplied
+  date?: string | null;
+  from_me?: boolean;
+}
+
+/**
+ * One thread returned by GET /api/triage. The classification is nested under
+ * `decision`; last-message from/date are derived from `messages[]`.
+ */
+export interface TriageThread {
+  thread_id: string;
+  subject: string;
   unread: boolean;
   participants: string[]; // bare email addresses
+  message_count: number;
+  messages: TriageMessage[];
   source_link: string | null; // Gmail thread URL
-  // last message preview, if the backend supplies it
-  last_message_from?: string | null;
-  last_message_date?: string | null;
+  decision: ThreadDecision;
 }
 
 export interface TriageResponse {
   threads: TriageThread[];
+  usage?: Record<string, unknown>;
 }
 
-/** Request body for POST /api/triage/add-to-board. */
+/** Request body for POST /api/triage/add-to-board — the thread's decision fields. */
 export interface AddToBoardRequest {
   thread_id: string;
-  assignee?: string;
-  workstream?: string;
-  tags?: string[];
+  category: TriageCategory;
+  summary: string;
+  action_on_me: string | null;
+  customer_related: boolean;
+  internal_only: boolean;
+  needs_response: boolean;
+  confidence: number;
 }
 
-/** Request body for POST /api/triage/mark-read. */
+/** Response from POST /api/triage/add-to-board. created:false = already on board. */
+export interface AddToBoardResponse {
+  created: boolean;
+  task: Task;
+}
+
+/** Request body for POST /api/triage/mark-read — Gmail message ids, not thread ids. */
 export interface MarkReadRequest {
-  thread_ids: string[];
+  message_ids: string[];
+}
+
+/** One roster member from GET /api/roster. */
+export interface RosterMember {
+  name: string;
+  email: string | null;
+}
+
+/** Return shape of workstream POST/PATCH/DELETE mutations. */
+export interface WorkstreamMutationResult {
+  ok: boolean;
+  workstreams: string[];
+  tasks_updated: number;
 }
 
 /** Request body for POST /api/drafts (draft-first "send"). */

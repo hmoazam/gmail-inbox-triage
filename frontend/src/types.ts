@@ -110,11 +110,14 @@ export interface ThreadDecision {
   confidence: number;
 }
 
-/** One message within a triage thread (subset used by the UI). */
+/** One message within a triage thread (mirrors backend ThreadMessageOut). */
 export interface TriageMessage {
   id: string;
-  from?: string | null; // sender display, if supplied
-  date?: string | null;
+  sender?: string; // raw From header, "Name <addr>"
+  sender_email?: string; // parsed bare address, lowercased
+  to?: string;
+  date?: string;
+  body?: string;
   from_me?: boolean;
 }
 

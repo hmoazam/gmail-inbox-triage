@@ -242,7 +242,7 @@ export function Triage({ onAuth, onAddedToBoard }: Props) {
                         const last = t.messages[t.messages.length - 1];
                         return (
                           <div className="thread-preview">
-                            {last?.from ? `From: ${last.from}\n` : ""}
+                            {last?.sender ? `From: ${last.sender}\n` : ""}
                             {last?.date ? `Date: ${last.date}\n\n` : ""}
                             {t.decision.summary || "No preview available."}
                           </div>

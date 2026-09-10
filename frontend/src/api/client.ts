@@ -10,6 +10,10 @@ import {
   type DraftResponse,
   type MarkReadRequest,
   type RosterMember,
+  type SlackAddToBoardRequest,
+  type SlackMarkReadRequest,
+  type SlackMarkReadResponse,
+  type SlackTriageResponse,
   type Tag,
   type TagCreate,
   type TagPatch,
@@ -197,6 +201,22 @@ export const api = {
 
   addToBoard(body: AddToBoardRequest): Promise<AddToBoardResponse> {
     return request<AddToBoardResponse>("/triage/add-to-board", { method: "POST", body });
+  },
+
+  // --- Slack triage ---
+  // GET /api/slack-triage → groups (Direct Messages first, then configured
+  // channel groups) each with classified conversations. 401/403 carries the
+  // Slack re-auth message in `detail`, surfaced via ApiError.isAuth.
+  fetchSlackTriage(): Promise<SlackTriageResponse> {
+    return request<SlackTriageResponse>("/slack-triage");
+  },
+
+  slackMarkRead(body: SlackMarkReadRequest): Promise<SlackMarkReadResponse> {
+    return request<SlackMarkReadResponse>("/slack-triage/mark-read", { method: "POST", body });
+  },
+
+  slackAddToBoard(body: SlackAddToBoardRequest): Promise<AddToBoardResponse> {
+    return request<AddToBoardResponse>("/slack-triage/add-to-board", { method: "POST", body });
   },
 
   // --- Drafts (draft-first "send" for teammate tasks) ---

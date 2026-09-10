@@ -6,6 +6,7 @@ import { ApiError, type Task, type TaskFilters, type ViewMode } from "./types";
 import { Board } from "./components/Board/Board";
 import { FilterBar } from "./components/FilterBar";
 import { Triage } from "./components/Triage/Triage";
+import { SlackTriage } from "./components/SlackTriage/SlackTriage";
 import { WorkstreamModal } from "./components/Workstreams/WorkstreamModal";
 import { TagManager } from "./components/Tags/TagManager";
 import { AddTaskModal } from "./components/AddTaskModal";
@@ -21,7 +22,7 @@ const EMPTY_FILTERS: TaskFilters = {
   search: "",
 };
 
-type Tab = "board" | "triage";
+type Tab = "board" | "triage" | "slack";
 type Modal = "workstreams" | "tags" | "add" | null;
 
 export default function App() {
@@ -85,7 +86,13 @@ export default function App() {
             className={`tab${tab === "triage" ? " active" : ""}`}
             onClick={() => setTab("triage")}
           >
-            Triage
+            Gmail Triage
+          </button>
+          <button
+            className={`tab${tab === "slack" ? " active" : ""}`}
+            onClick={() => setTab("slack")}
+          >
+            Slack Triage
           </button>
         </nav>
 
@@ -173,6 +180,10 @@ export default function App() {
 
       {tab === "triage" && (
         <Triage onAuth={setNotice} onAddedToBoard={() => void data.refreshTasks()} />
+      )}
+
+      {tab === "slack" && (
+        <SlackTriage onAuth={setNotice} onAddedToBoard={() => void data.refreshTasks()} />
       )}
 
       {modal === "workstreams" && (

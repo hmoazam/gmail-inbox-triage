@@ -450,6 +450,21 @@ button {
   font-size: 13px;
 }
 
+.slack-group {
+  margin-bottom: 28px;
+}
+
+.slack-group-header {
+  font-size: 17px;
+  font-weight: 700;
+  margin-bottom: 10px;
+  padding-bottom: 6px;
+  border-bottom: 2px solid var(--border);
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}
+
 .triage-bucket {
   margin-bottom: 20px;
 }

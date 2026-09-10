@@ -5,6 +5,12 @@ import json
 import os
 from pathlib import Path
 
+# Slack user OAuth token (xoxp-…), read at runtime — the app's own token, exactly
+# analogous to how Gmail uses the local gcloud ADC token. Set via SLACK_USER_TOKEN.
+# Needs user scopes: channels:read, groups:read, im:read, mpim:read,
+# channels:history, groups:history, im:history, mpim:history, users:read.
+SLACK_USER_TOKEN = os.environ.get("SLACK_USER_TOKEN", "")
+
 # Google Cloud project used for API quota/billing on every Gmail API call
 # (the gcloud Application Default Credentials auth path attributes usage to it).
 # Set this to your own GCP project id via GMAIL_QUOTA_PROJECT.
@@ -93,6 +99,74 @@ WORKSTREAMS: list[str] = _load_json_list(
     "CLEANUP_WORKSTREAMS_PATH", _DEFAULT_WORKSTREAMS
 )
 
+
+# ---------------------------------------------------------------------------
+# Slack triage categories (channel-ID lists per category)
+# ---------------------------------------------------------------------------
+
+def _load_json_dict(env_var: str, default: dict) -> dict:
+    """Load a JSON object (``{category: [channel_id, ...]}``) from a file path in
+    ``env_var``, or return ``default``.
+
+    Same escape-hatch pattern as ``_load_json_list``: set the env var to an
+    absolute path of a UTF-8 JSON file and restart. Silently falls back to the
+    default on any error (missing file, bad JSON, wrong root type).
+    """
+    path_str = os.environ.get(env_var, "")
+    if not path_str:
+        return default
+    try:
+        loaded = json.loads(Path(path_str).expanduser().read_text())
+        return loaded if isinstance(loaded, dict) else default
+    except Exception:
+        return default
+
+
+# Default Slack category map: {category: [channel_id, ...]}. Dict insertion order
+# IS the display order the API returns groups in ("Direct Messages" is implicit and
+# rendered first by the route). Inline comments map channel id → channel name so
+# this list is maintainable. Override entirely by pointing
+# CLEANUP_SLACK_CATEGORIES_PATH at a JSON file with the same shape.
+_DEFAULT_SLACK_CATEGORIES: dict[str, list[str]] = {
+    # TODO: 5 Slack Connect channels (Aon / AXA / Flutter / KPMG / Tesco -
+    # AI Gateway). Awaiting channel IDs from the user — empty renders no channels.
+    "AI Gateway Accounts": [],
+    "Team": [
+        "C0ADP69J1P0", "C07KW6R9JR4", "C08CEV945GE", "C0AGPHM9Z29",
+        "C0A7AA0PMMM", "C0AH9JR5GKB", "C0ABLUBHJTF",
+    ],
+    "Rolls Royce": [
+        "C04RQJ27SN9",  # team-rolls-royce
+        "C07KUHKR78B",  # team-rolls-royce-extended
+        "C097UPNJ3CK",  # team-rolls-royce-mro
+        "C08U97CAPEH",  # team-rolls-royce-one
+        "C08KTN6KWKG",  # team-rolls-royce-sap
+        "C096U18PVHU",  # team-rolls-royce-airr
+        "C0AJZK3GE3C",  # team-rolls-royce-bz-serverless
+        "C0AHR51BKEV",  # team-rolls-royce-abac-mvp
+        "C0AESU50C04",  # team-rolls-royce-abac-mvp-2
+        "C08JNNM6NV6",  # rolls-royce-core
+        "C0B2K137DK9",  # rolls-royce-fe-core
+        "C0AAG897K24",  # rolls-royce-ai-strategy-day
+        "C0B0Q1GPFCJ",  # rollsroyce-interop
+        "C099TJA76N7",  # rollsroyce-obo-cross-workspace
+        "C0BG957JFDH",  # azure-natgw-rolls-royce
+        "C0AFS7SEKFA",  # esc687-rolls-royce
+        "C0BF0TLDJ5Q",  # rr-pbi-takeout
+        "C0BPBLSDSKT",  # genie-ppai-security-rolls-royce
+    ],
+    "SME": [
+        "C05AAPK63DK", "C0BHBLZMJV9", "C0B1K1QQNSJ", "C0BN58UJXSA",
+        "C08CEFZSDE0", "C07H2H9GV7Y", "C0B3CHJ4GD6", "C09AH9FJES1",
+        "C04J6F541KJ", "C0AHMQBKRCJ",
+        "C0BPTP65AHJ",  # emea-ai-governance-epls
+        "C0BRLBK6L83",  # ai-governance-office-hours-emea
+    ],
+}
+SLACK_CATEGORIES: dict[str, list[str]] = _load_json_dict(
+    "CLEANUP_SLACK_CATEGORIES_PATH", _DEFAULT_SLACK_CATEGORIES
+)
+
 # ---------------------------------------------------------------------------
 # Drive folder names (Phase 2/3 — Meet notes + transcript ingestion)
 # ---------------------------------------------------------------------------
@@ -122,6 +196,9 @@ def get_settings() -> dict:
         "thread_batch_size": THREAD_BATCH_SIZE,
         "per_msg_body_chars": PER_MSG_BODY_CHARS,
         "anthropic_api_key": os.environ.get("ANTHROPIC_API_KEY"),
+        # Slack triage
+        "slack_user_token": SLACK_USER_TOKEN,
+        "slack_categories": SLACK_CATEGORIES,
         # Action Board
         "team_roster": TEAM_ROSTER,
         "workstreams": WORKSTREAMS,

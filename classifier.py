@@ -28,7 +28,9 @@ import logging
 import os
 import re
 
-from models import EmailThread, ThreadDecision, CATEGORIES, CATEGORY_OTHER
+from models import (
+    EmailThread, ThreadDecision, CATEGORIES, CATEGORY_OTHER, TASK_SOURCE_SLACK,
+)
 
 log = logging.getLogger(__name__)
 
@@ -106,8 +108,12 @@ def _extract_json_object(text: str) -> dict:
     return {}
 
 
-def _coerce(raw: dict, thread: EmailThread) -> ThreadDecision:
-    """Map a raw dict to a ThreadDecision, enforcing invariants safely."""
+def _coerce_fields(raw: dict, thread_id: str) -> ThreadDecision:
+    """Map a raw model dict to a ThreadDecision, enforcing invariants safely.
+
+    Shared by the email (``_coerce``) and Slack (``_coerce_slack``) paths — the
+    only difference between them is where the id comes from.
+    """
     action = raw.get("action_on_me")
     if isinstance(action, str) and action.strip().lower() in ("", "null", "none"):
         action = None
@@ -126,7 +132,7 @@ def _coerce(raw: dict, thread: EmailThread) -> ThreadDecision:
         category = "useful"
 
     return ThreadDecision(
-        thread_id=thread.thread_id,
+        thread_id=thread_id,
         category=category,
         customer_related=bool(raw.get("customer_related", False)),
         internal_only=bool(raw.get("internal_only", False)),
@@ -135,6 +141,11 @@ def _coerce(raw: dict, thread: EmailThread) -> ThreadDecision:
         summary=str(raw.get("summary", "")).strip(),
         confidence=float(raw.get("confidence", 0.0) or 0.0),
     )
+
+
+def _coerce(raw: dict, thread: EmailThread) -> ThreadDecision:
+    """Map a raw dict to a ThreadDecision, enforcing invariants safely."""
+    return _coerce_fields(raw, thread.thread_id)
 
 
 def _safe_default(thread: EmailThread, reason: str) -> ThreadDecision:
@@ -546,4 +557,154 @@ def thread_decision_to_task(
         context=decision.summary or "",
         customer_related=decision.customer_related,
         confidence=decision.confidence,
+    )
+
+
+# ── Slack classification ──────────────────────────────────────────────────────
+
+def _slack_system_prompt(settings: dict) -> str:
+    name = settings["user_name"] or settings.get("user_email") or "the account owner"
+    domain = settings.get("internal_domain") or "the company"
+    return f"""You are a Slack triage assistant for {name}. You are given ONE \
+Slack conversation — either a direct message or a channel — showing the UNREAD \
+messages in order (oldest first). Messages sent by {name} are marked \
+"From: ME". Analyze the conversation and return a single JSON object describing it.
+
+Decide these fields:
+
+- "customer_related": true if the conversation involves an external customer, \
+prospect, partner, or their use case / deal / support. false if it does not.
+- "internal_only": true if it is a purely internal discussion (colleagues at \
+{domain}) with no external customer participating. A conversation can be \
+internal_only and still be customer_related (an internal discussion ABOUT a customer).
+- "needs_response": true if the LATEST state of the conversation is waiting on a \
+reply from someone. Consider who sent the last message and what it asked.
+- "action_on_me": if there is a concrete action, decision, or reply required \
+specifically from {name}, write it as one short imperative sentence (e.g. \
+"Reply to Alice with the Q3 architecture doc"). If {name} has already handled it, \
+or the action is on someone else, or there is no action, set this to null.
+- "category": exactly one of:
+    - "action_required": there IS an outstanding action on {name} (action_on_me \
+is not null).
+    - "useful": no action on {name}, but worth being aware of.
+    - "other": everything else — noise, bots, notifications with no value.
+- "summary": one short sentence describing the conversation.
+- "confidence": 0.0-1.0.
+
+Rules:
+- Be precise about action_on_me: only flag a real action on {name}, not on others.
+- If action_on_me is null, category MUST be "useful" or "other".
+- If action_on_me is non-null, category MUST be "action_required".
+
+Return ONLY the JSON object, no surrounding text:
+{{"customer_related": bool, "internal_only": bool, "needs_response": bool, \
+"action_on_me": "..." or null, "category": "action_required|useful|other", \
+"summary": "...", "confidence": 0.0}}"""
+
+
+def _slack_transcript(conv, per_msg_chars: int) -> str:
+    """Readable transcript of a Slack conversation's unread messages."""
+    lines = [f"Conversation: {conv.name}  ({conv.kind})", ""]
+    for i, m in enumerate(conv.messages, 1):
+        lines.append(f"--- Message {i}/{len(conv.messages)} ---")
+        lines.append(f"From: {m.author}")
+        lines.append(f"Time: {m.ts}")
+        lines.append("")
+        lines.append((m.text or "").strip()[:per_msg_chars])
+        lines.append("")
+    return "\n".join(lines)
+
+
+def _slack_safe_default(conv, reason: str) -> ThreadDecision:
+    return ThreadDecision(
+        thread_id=conv.id, category=CATEGORY_OTHER, summary=reason, confidence=0.0,
+    )
+
+
+def classify_slack_conversation(conv, settings: dict,
+                                stats: "UsageStats | None" = None) -> ThreadDecision:
+    """Classify a single Slack conversation into a ThreadDecision-shaped result.
+
+    Reuses the same backend plumbing (_via_cli / _via_databricks_fm /
+    _via_anthropic) as the email path. ``conv`` is the normalized
+    ``slack_client.SlackConversation`` (duck-typed: ``.id``, ``.name``,
+    ``.kind``, ``.messages`` with ``.author`` / ``.ts`` / ``.text``).
+
+    Never raises except on auth-like errors (re-raised so the route returns
+    401/403); any other failure returns a safe "other" default.
+    """
+    system = _slack_system_prompt(settings)
+    user = ("Here is the Slack conversation. Classify it and return the JSON "
+            "object only.\n\n" + _slack_transcript(conv, settings["per_msg_body_chars"]))
+    backend, model = settings["backend"], settings["model"]
+    try:
+        if backend == "databricks_fm":
+            text, in_tok, out_tok, cost = _via_databricks_fm(
+                system, user, model, settings["databricks_profile"])
+        elif backend == "anthropic_api":
+            key = settings.get("anthropic_api_key")
+            if not key:
+                raise RuntimeError("CLEANUP_BACKEND=anthropic_api but ANTHROPIC_API_KEY is not set.")
+            text, in_tok, out_tok, cost = _via_anthropic(system, user, model, key)
+        else:  # claude_cli (default)
+            text, in_tok, out_tok, cost = asyncio.run(_via_cli(system, user, model))
+    except Exception as exc:  # noqa: BLE001
+        msg = str(exc)
+        if any(k in type(exc).__name__ + msg for k in
+               ("Auth", "401", "403", "Permission", "Credential", "Unauthorized")):
+            raise
+        return _slack_safe_default(conv, f"Classification unavailable ({type(exc).__name__}).")
+
+    if stats is not None:
+        stats.add(in_tok, out_tok, cost)
+
+    raw = _extract_json_object(text)
+    if not raw:
+        return _slack_safe_default(conv, "Could not parse classification; treated as other.")
+    return _coerce_fields(raw, conv.id)
+
+
+# ── Slack → Task bridge ───────────────────────────────────────────────────────
+
+def slack_conversation_to_task(
+    *,
+    channel_id: str,
+    name: str,
+    permalink: str | None,
+    summary: str,
+    action_on_me: str | None,
+    customer_related: bool,
+    confidence: float,
+    settings: dict,
+    assignee: str | None = None,
+    workstream: str | None = None,
+    tags: list[str] | None = None,
+) -> "Task":
+    """Bridge a triaged Slack conversation into a board Task.
+
+    Title is ``action_on_me`` if present, else the ``summary``, else the
+    conversation ``name``. Source is ``TASK_SOURCE_SLACK``; ``source_ref`` is the
+    channel id (the dedup key alongside the title); ``source_link`` is the
+    permalink. Assignee defaults to the account owner.
+
+    Does NOT persist — the caller dedup-checks via
+    ``task_store.find_by_source("slack", channel_id, task.title)`` and then adds.
+    """
+    from task_store import new_task  # deferred import to avoid circular at module load
+
+    owner = settings.get("user_name") or settings.get("user_email") or "Hanna"
+    title = (action_on_me or "").strip() or (summary or "").strip() or name
+
+    return new_task(
+        title=title,
+        assignee=(assignee or "").strip() or owner,
+        workstream=(workstream or "").strip() or "unassigned",
+        status="todo",
+        source=TASK_SOURCE_SLACK,
+        source_ref=channel_id,
+        source_link=permalink or None,
+        context=summary or "",
+        customer_related=customer_related,
+        confidence=confidence,
+        tags=tags or [],
     )

@@ -200,6 +200,96 @@ class AddToBoardResponse(BaseModel):
 
 
 # ---------------------------------------------------------------------------
+# Slack triage
+# ---------------------------------------------------------------------------
+
+class SlackDecisionOut(BaseModel):
+    """The classification nested on each Slack conversation.
+
+    Same field SET as ``ThreadDecisionOut`` minus ``thread_id`` (the id already
+    lives on the conversation), matching the frontend contract exactly.
+    """
+    category: str
+    summary: str = ""
+    action_on_me: str | None = None
+    customer_related: bool = False
+    internal_only: bool = False
+    needs_response: bool = False
+    confidence: float = 0.0
+
+    @classmethod
+    def from_decision(cls, d: ThreadDecision) -> "SlackDecisionOut":
+        return cls(
+            category=d.category,
+            summary=d.summary,
+            action_on_me=d.action_on_me,
+            customer_related=d.customer_related,
+            internal_only=d.internal_only,
+            needs_response=d.needs_response,
+            confidence=d.confidence,
+        )
+
+
+class SlackMessageOut(BaseModel):
+    author: str
+    ts: str
+    text: str
+
+
+class SlackConversationOut(BaseModel):
+    """One triaged Slack conversation: metadata + unread messages + decision."""
+    id: str
+    kind: str                       # "im" | "channel"
+    name: str
+    unread_count: int
+    messages: list[SlackMessageOut]
+    latest_ts: str
+    permalink: str
+    decision: SlackDecisionOut
+
+
+class SlackGroupOut(BaseModel):
+    """A named category and the conversations in it (order is display order)."""
+    category: str
+    conversations: list[SlackConversationOut]
+
+
+class SlackTriageResponse(BaseModel):
+    groups: list[SlackGroupOut]
+    usage: dict
+
+
+class SlackMarkReadRequest(BaseModel):
+    """Move a conversation's read cursor. The only Slack mutation the API exposes."""
+    channel_id: str
+    ts: str
+
+
+class SlackMarkReadResponse(BaseModel):
+    ok: bool
+
+
+class SlackAddToBoardRequest(BaseModel):
+    """Slack conversation → Task bridge input (decision fields + optional routing)."""
+    channel_id: str
+    name: str
+    permalink: str | None = None
+    summary: str = ""
+    action_on_me: str | None = None
+    customer_related: bool = False
+    needs_response: bool = False
+    confidence: float = 0.0
+    assignee: str | None = None
+    workstream: str | None = None
+    tags: list[str] = Field(default_factory=list)
+
+
+class SlackAddToBoardResponse(BaseModel):
+    created: bool          # False if the task already existed (dedup hit)
+    task: TaskOut
+
+
+# ---------------------------------------------------------------------------
 # Ingest (Meet notes / uploaded transcripts → tasks)
 # ---------------------------------------------------------------------------
 

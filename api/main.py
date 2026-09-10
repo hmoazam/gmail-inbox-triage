@@ -19,7 +19,9 @@ from fastapi.staticfiles import StaticFiles
 
 from gmail_client import AuthError as GmailAuthError
 from drive_client import AuthError as DriveAuthError
-from api.routes import drafts, ingest, roster, tags, tasks, triage, workstreams
+from api.routes import (
+    drafts, ingest, roster, slack_triage, tags, tasks, triage, workstreams,
+)
 
 # Vite dev server origins (localhost and 127.0.0.1 forms).
 DEV_ORIGINS = [
@@ -64,6 +66,7 @@ app.include_router(roster.router)
 app.include_router(workstreams.router)
 app.include_router(tags.router)
 app.include_router(triage.router)
+app.include_router(slack_triage.router)
 app.include_router(ingest.router)
 app.include_router(drafts.router)
 

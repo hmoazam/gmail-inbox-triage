@@ -11,9 +11,11 @@ from datetime import date
 from config import get_settings
 from gmail_client import GmailClient
 from drive_client import DriveClient
+from slack_client import SlackClient
 
 _gmail: GmailClient | None = None
 _drive: DriveClient | None = None
+_slack: SlackClient | None = None
 
 
 def get_gmail_client() -> GmailClient:
@@ -21,6 +23,13 @@ def get_gmail_client() -> GmailClient:
     if _gmail is None:
         _gmail = GmailClient()
     return _gmail
+
+
+def get_slack_client() -> SlackClient:
+    global _slack
+    if _slack is None:
+        _slack = SlackClient()
+    return _slack
 
 
 def get_drive_client() -> DriveClient:

@@ -11,7 +11,7 @@ export const TASK_STATUS_LABELS: Record<TaskStatus, string> = {
   done: "Done",
 };
 
-export const TASK_SOURCES = ["email", "meet", "teams", "manual"] as const;
+export const TASK_SOURCES = ["email", "meet", "teams", "manual", "slack"] as const;
 export type TaskSource = (typeof TASK_SOURCES)[number];
 
 // Triage bucket categories, in render order (models.py CATEGORIES).
@@ -165,75 +165,29 @@ export interface MarkReadRequest {
 }
 
 // ---------------------------------------------------------------------------
-// Slack triage (GET /api/slack-triage and its actions).
-// Grouped by CATEGORY (Direct Messages first, then the configured channel
-// groups). Within a group, conversations carry the SAME `decision` shape as
-// the Gmail triage thread, so they bucket into action_required/useful/other.
+// Slack action extraction (POST /api/slack-triage/extract).
+// URL-driven: paste a Slack channel/thread URL, the backend reads that one
+// conversation via the dbexec Slack MCP and extracts the pending actions the
+// user still needs to do. SLOW (~1–2 min). Adding a task reuses POST /api/tasks
+// with source "slack" and source_link = the returned source_link.
 // ---------------------------------------------------------------------------
 
-/** One unread message inside a Slack conversation (mirrors backend). */
-export interface SlackMessage {
-  author: string; // display name of the sender
-  ts: string; // Slack message timestamp ("1699...")
-  text: string;
+/** Request body for POST /api/slack-triage/extract. */
+export interface SlackExtractRequest {
+  url: string;
 }
 
-/**
- * One Slack conversation returned by GET /api/slack-triage. `decision` reuses
- * the Gmail ThreadDecision shape (category/summary/action_on_me/…). Send
- * `latest_ts` as the `ts` when marking read.
- */
-export interface SlackConversation {
-  id: string; // Slack channel/DM id (e.g. "C0…" or "D0…")
-  kind: "im" | "channel";
-  name: string; // channel name, or DM user's real name
-  unread_count: number;
-  messages: SlackMessage[];
-  latest_ts: string; // ts of the most recent unread message
-  permalink: string; // deep link into Slack
-  decision: ThreadDecision;
+/** One proposed action extracted from a Slack conversation. */
+export interface SlackAction {
+  task: string; // proposed task title
+  context: string; // supporting context / why
+  due: string | null; // YYYY-MM-DD or null
 }
 
-/** One category group in the Slack triage response, rendered in array order. */
-export interface SlackGroup {
-  category: string; // "Direct Messages", "AI Gateway Accounts", "Team", …
-  conversations: SlackConversation[];
-}
-
-/** GET /api/slack-triage → groups in display order + optional usage stats. */
-export interface SlackTriageResponse {
-  groups: SlackGroup[];
-  usage?: Record<string, unknown>;
-}
-
-/** POST /api/slack-triage/mark-read — send the conversation's latest_ts as ts. */
-export interface SlackMarkReadRequest {
-  channel_id: string;
-  ts: string;
-}
-
-/** Response from POST /api/slack-triage/mark-read. */
-export interface SlackMarkReadResponse {
-  ok: boolean;
-}
-
-/**
- * POST /api/slack-triage/add-to-board. Mirrors the contract exactly: no
- * `internal_only`/`category` (unlike the Gmail body) — the backend derives the
- * task from these fields. Reuses AddToBoardResponse ({ created, task }).
- */
-export interface SlackAddToBoardRequest {
-  channel_id: string;
-  name: string;
-  permalink: string;
-  summary: string;
-  action_on_me: string | null;
-  customer_related: boolean;
-  needs_response: boolean;
-  confidence: number;
-  assignee?: string;
-  workstream?: string;
-  tags?: string[];
+/** Response from POST /api/slack-triage/extract. `actions` may be empty. */
+export interface SlackExtractResponse {
+  source_link: string; // canonical Slack link the tasks should point at
+  actions: SlackAction[];
 }
 
 /** One roster member from GET /api/roster. */

@@ -10,10 +10,7 @@ import {
   type DraftResponse,
   type MarkReadRequest,
   type RosterMember,
-  type SlackAddToBoardRequest,
-  type SlackMarkReadRequest,
-  type SlackMarkReadResponse,
-  type SlackTriageResponse,
+  type SlackExtractResponse,
   type Tag,
   type TagCreate,
   type TagPatch,
@@ -203,20 +200,17 @@ export const api = {
     return request<AddToBoardResponse>("/triage/add-to-board", { method: "POST", body });
   },
 
-  // --- Slack triage ---
-  // GET /api/slack-triage → groups (Direct Messages first, then configured
-  // channel groups) each with classified conversations. 401/403 carries the
-  // Slack re-auth message in `detail`, surfaced via ApiError.isAuth.
-  fetchSlackTriage(): Promise<SlackTriageResponse> {
-    return request<SlackTriageResponse>("/slack-triage");
-  },
-
-  slackMarkRead(body: SlackMarkReadRequest): Promise<SlackMarkReadResponse> {
-    return request<SlackMarkReadResponse>("/slack-triage/mark-read", { method: "POST", body });
-  },
-
-  slackAddToBoard(body: SlackAddToBoardRequest): Promise<AddToBoardResponse> {
-    return request<AddToBoardResponse>("/slack-triage/add-to-board", { method: "POST", body });
+  // --- Slack action extraction ---
+  // POST /api/slack-triage/extract { url } → { source_link, actions[] }.
+  // SLOW (~1–2 min): the backend reads the conversation via the dbexec Slack
+  // MCP and extracts pending actions. 401/403 carries the dbexec/Slack re-auth
+  // message in `detail`, surfaced via ApiError.isAuth. Adding a task uses the
+  // existing createTask (POST /api/tasks) with source "slack".
+  extractSlackActions(url: string): Promise<SlackExtractResponse> {
+    return request<SlackExtractResponse>("/slack-triage/extract", {
+      method: "POST",
+      body: { url },
+    });
   },
 
   // --- Drafts (draft-first "send" for teammate tasks) ---

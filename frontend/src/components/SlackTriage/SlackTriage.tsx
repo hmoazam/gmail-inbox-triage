@@ -1,50 +1,44 @@
 import { useState } from "react";
 import { api } from "../../api/client";
-import {
-  ApiError,
-  TRIAGE_CATEGORIES,
-  TRIAGE_CATEGORY_LABELS,
-  type SlackConversation,
-  type SlackGroup,
-  type TriageCategory,
-} from "../../types";
+import { ApiError, type SlackAction, type Tag } from "../../types";
+import { ME, UNASSIGNED } from "../../constants";
+import { TagChip } from "../Tags/TagChip";
+import { TagPicker } from "../Tags/TagPicker";
 
 interface Props {
-  /** Surface a Slack-auth-expired / missing-scope message in the global banner. */
+  /** Surface a dbexec/Slack-unavailable message verbatim in the global banner. */
   onAuth: (message: string) => void;
-  /** Called after a conversation is added to the board so the board refetches. */
+  /** Called after an action is added to the board so the board refetches. */
   onAddedToBoard: () => void;
+  /** Workstream options for the per-action picker (reused from the board). */
+  workstreams: string[];
+  /** Tag registry for the per-action tag picker. */
+  tags: Tag[];
+  /** Register a brand-new free-form tag so its color is stable (POST /api/tags). */
+  onCreateTag: (name: string) => Promise<void> | void;
 }
 
-const CATEGORY_META: Record<TriageCategory, { icon: string; sub: string }> = {
-  action_required: { icon: "🚨", sub: "Conversations with a concrete action on you." },
-  useful: { icon: "💡", sub: "No action needed, but worth being aware of." },
-  other: { icon: "🗂️", sub: "Everything else." },
-};
-
-export function SlackTriage({ onAuth, onAddedToBoard }: Props) {
-  const [groups, setGroups] = useState<SlackGroup[]>([]);
-  const [added, setAdded] = useState<Set<string>>(new Set());
-  const [marked, setMarked] = useState<Set<string>>(new Set());
-  const [expanded, setExpanded] = useState<Set<string>>(new Set());
+export function SlackTriage({ onAuth, onAddedToBoard, workstreams, tags, onCreateTag }: Props) {
+  const [url, setUrl] = useState("");
+  const [sourceLink, setSourceLink] = useState<string>("");
+  const [actions, setActions] = useState<SlackAction[] | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [hasFetched, setHasFetched] = useState(false);
 
   const handleErr = (err: unknown) => {
     if (err instanceof ApiError && err.isAuth) onAuth(err.message);
     else setError(err instanceof ApiError ? err.message : "Request failed");
   };
 
-  const fetchGroups = async () => {
+  const extract = async () => {
+    if (!url.trim() || loading) return;
     setLoading(true);
     setError(null);
+    setActions(null);
     try {
-      const res = await api.fetchSlackTriage();
-      setGroups(res.groups);
-      setAdded(new Set());
-      setMarked(new Set());
-      setHasFetched(true);
+      const res = await api.extractSlackActions(url.trim());
+      setSourceLink(res.source_link);
+      setActions(res.actions);
     } catch (err) {
       handleErr(err);
     } finally {
@@ -52,188 +46,195 @@ export function SlackTriage({ onAuth, onAddedToBoard }: Props) {
     }
   };
 
-  const toggleExpand = (id: string) =>
-    setExpanded((prev) => {
-      const next = new Set(prev);
-      if (next.has(id)) next.delete(id);
-      else next.add(id);
-      return next;
-    });
-
-  const markRead = async (c: SlackConversation) => {
-    try {
-      // mark-read takes the channel id + the latest unread ts.
-      await api.slackMarkRead({ channel_id: c.id, ts: c.latest_ts });
-      // Drop the conversation from every group it appears in.
-      setGroups((prev) =>
-        prev.map((g) => ({
-          ...g,
-          conversations: g.conversations.filter((x) => x.id !== c.id),
-        })),
-      );
-      setMarked((prev) => new Set(prev).add(c.id));
-    } catch (err) {
-      handleErr(err);
-    }
-  };
-
-  const addToBoard = async (c: SlackConversation) => {
-    const d = c.decision;
-    try {
-      // add-to-board carries the conversation's decision fields; returns
-      // {created, task}. created:false means it was already on the board.
-      const res = await api.slackAddToBoard({
-        channel_id: c.id,
-        name: c.name,
-        permalink: c.permalink,
-        summary: d.summary,
-        action_on_me: d.action_on_me,
-        customer_related: d.customer_related,
-        needs_response: d.needs_response,
-        confidence: d.confidence,
-      });
-      setAdded((prev) => new Set(prev).add(c.id));
-      if (res.created) onAddedToBoard();
-    } catch (err) {
-      handleErr(err);
-    }
-  };
-
-  const groupCount = (g: SlackGroup) => g.conversations.length;
-
   return (
     <div className="triage">
       <div className="triage-toolbar">
-        <div style={{ flex: 1, minWidth: 260, fontSize: 13, color: "var(--text-muted)" }}>
-          Unread Slack DMs and channel messages, grouped by category and classified with Claude.
-        </div>
-        <button className="btn btn-primary" onClick={() => void fetchGroups()} disabled={loading}>
-          {loading ? "Classifying…" : "🔄 Fetch & classify"}
+        <label style={{ flex: 1, minWidth: 320 }}>
+          Paste a Slack channel or thread URL
+          <input
+            type="text"
+            value={url}
+            onChange={(e) => setUrl(e.target.value)}
+            placeholder="https://…slack.com/archives/C…/p…"
+            onKeyDown={(e) => e.key === "Enter" && void extract()}
+            disabled={loading}
+          />
+        </label>
+        <button
+          className="btn btn-primary"
+          onClick={() => void extract()}
+          disabled={loading || !url.trim()}
+        >
+          {loading ? "Extracting…" : "🔍 Extract my actions"}
         </button>
       </div>
 
       {error && <div className="banner banner-error">{error}</div>}
 
-      {!hasFetched && !loading && (
+      {loading && (
         <div className="empty-state">
-          Hit “Fetch &amp; classify” to triage your unread Slack messages.
+          ⏳ Reading the conversation and extracting your actions… this can take up to
+          ~2&nbsp;minutes. Please keep this tab open.
         </div>
       )}
 
-      {hasFetched && groups.length === 0 && (
-        <div className="empty-state">No unread Slack conversations. 🎉</div>
+      {!loading && actions === null && !error && (
+        <div className="empty-state">
+          Paste a Slack channel or thread URL and hit “Extract my actions” to pull the tasks you
+          still need to do.
+        </div>
       )}
 
-      {hasFetched &&
-        groups.map((group) => (
-          <div className="slack-group" key={group.category}>
-            <div className="slack-group-header">
-              💬 {group.category}{" "}
-              <span className="muted" style={{ fontWeight: 400 }}>
-                ({groupCount(group)})
-              </span>
-            </div>
+      {!loading && actions !== null && actions.length === 0 && (
+        <div className="empty-state">No pending actions found in that conversation.</div>
+      )}
 
-            {groupCount(group) === 0 && <div className="muted">Nothing unread here.</div>}
-
-            {groupCount(group) > 0 &&
-              TRIAGE_CATEGORIES.map((cat) => {
-                const items = group.conversations.filter((c) => c.decision.category === cat);
-                if (items.length === 0) return null;
-                const meta = CATEGORY_META[cat];
-                return (
-                  <div className="triage-bucket" key={cat}>
-                    <div className="triage-bucket-header">
-                      {meta.icon} {TRIAGE_CATEGORY_LABELS[cat]}{" "}
-                      <span className="muted" style={{ fontWeight: 400 }}>
-                        ({items.length})
-                      </span>
-                    </div>
-                    <div className="triage-bucket-sub">{meta.sub}</div>
-                    {items.map((c) => (
-                      <div className="thread" key={c.id}>
-                        <div className="thread-body">
-                          <div className="thread-subject">
-                            {c.kind === "im" ? "👤 " : "#"}
-                            {c.name}
-                            {c.unread_count > 0 ? (
-                              <span className="muted" style={{ fontWeight: 400, fontSize: 12 }}>
-                                {"  ·  "}
-                                {c.unread_count} unread
-                              </span>
-                            ) : (
-                              ""
-                            )}
-                          </div>
-                          {cat === "action_required" && c.decision.action_on_me && (
-                            <div className="thread-action">🚨 Action: {c.decision.action_on_me}</div>
-                          )}
-                          {c.decision.summary && (
-                            <div className="thread-summary">
-                              💬 {c.decision.summary}
-                              {c.decision.confidence
-                                ? `  ·  ${Math.round(c.decision.confidence * 100)}%`
-                                : ""}
-                            </div>
-                          )}
-                          <div className="card-meta">
-                            {c.decision.customer_related && (
-                              <span className="badge">🧑‍💼 Customer</span>
-                            )}
-                            {c.decision.internal_only && <span className="badge">🏢 Internal</span>}
-                            {c.decision.needs_response && (
-                              <span className="badge">↩️ Needs response</span>
-                            )}
-                            {c.permalink && (
-                              <a
-                                className="card-link"
-                                href={c.permalink}
-                                target="_blank"
-                                rel="noreferrer"
-                              >
-                                ↗ Open in Slack
-                              </a>
-                            )}
-                          </div>
-                          <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
-                            <button
-                              className="btn btn-sm btn-primary"
-                              disabled={added.has(c.id)}
-                              onClick={() => void addToBoard(c)}
-                            >
-                              {added.has(c.id) ? "✓ Added" : "📋 Add to board"}
-                            </button>
-                            <button
-                              className="btn btn-sm"
-                              disabled={marked.has(c.id)}
-                              onClick={() => void markRead(c)}
-                            >
-                              {marked.has(c.id) ? "✓ Marked read" : "✅ Mark read"}
-                            </button>
-                            <button
-                              className="btn btn-sm"
-                              onClick={() => toggleExpand(c.id)}
-                            >
-                              {expanded.has(c.id) ? "Hide" : "Read messages"}
-                            </button>
-                          </div>
-                          {expanded.has(c.id) && (
-                            <div className="thread-preview">
-                              {c.messages.length === 0
-                                ? "No unread messages to preview."
-                                : c.messages
-                                    .map((m) => `${m.author}: ${m.text}`)
-                                    .join("\n\n")}
-                            </div>
-                          )}
-                        </div>
-                      </div>
-                    ))}
-                  </div>
-                );
-              })}
-          </div>
+      {!loading &&
+        actions !== null &&
+        actions.length > 0 &&
+        actions.map((action, i) => (
+          <ActionRow
+            key={i}
+            action={action}
+            sourceLink={sourceLink}
+            workstreams={workstreams}
+            tags={tags}
+            onCreateTag={onCreateTag}
+            onAdded={onAddedToBoard}
+            onError={handleErr}
+          />
         ))}
+    </div>
+  );
+}
+
+interface RowProps {
+  action: SlackAction;
+  sourceLink: string;
+  workstreams: string[];
+  tags: Tag[];
+  onCreateTag: (name: string) => Promise<void> | void;
+  onAdded: () => void;
+  onError: (err: unknown) => void;
+}
+
+/** One editable proposed task extracted from the conversation. */
+function ActionRow({
+  action,
+  sourceLink,
+  workstreams,
+  tags,
+  onCreateTag,
+  onAdded,
+  onError,
+}: RowProps) {
+  const [title, setTitle] = useState(action.task);
+  const [context, setContext] = useState(action.context);
+  const [due, setDue] = useState(action.due ?? "");
+  const [workstream, setWorkstream] = useState(UNASSIGNED);
+  const [selectedTags, setSelectedTags] = useState<string[]>([]);
+  const [busy, setBusy] = useState(false);
+  const [added, setAdded] = useState(false);
+
+  const addToBoard = async () => {
+    if (!title.trim() || busy || added) return;
+    setBusy(true);
+    try {
+      await api.createTask({
+        title: title.trim(),
+        context,
+        due_date: due || null,
+        source: "slack",
+        source_link: sourceLink,
+        assignee: ME,
+        workstream,
+        tags: selectedTags,
+      });
+      setAdded(true);
+      onAdded();
+    } catch (err) {
+      onError(err);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <div className="thread">
+      <div className="thread-body">
+        <label style={{ fontSize: 12, color: "var(--text-muted)", fontWeight: 600 }}>
+          Action / title
+          <input
+            type="text"
+            value={title}
+            onChange={(e) => setTitle(e.target.value)}
+            style={{ fontWeight: 600, fontSize: 14 }}
+          />
+        </label>
+
+        <label style={{ fontSize: 12, color: "var(--text-muted)", fontWeight: 600 }}>
+          Context
+          <textarea
+            value={context}
+            onChange={(e) => setContext(e.target.value)}
+            rows={2}
+            style={{ fontFamily: "inherit", fontSize: 13, resize: "vertical" }}
+          />
+        </label>
+
+        <div style={{ display: "flex", gap: 12, flexWrap: "wrap", alignItems: "flex-end" }}>
+          <label style={{ fontSize: 12, color: "var(--text-muted)", fontWeight: 600 }}>
+            Due date
+            <input type="date" value={due} onChange={(e) => setDue(e.target.value)} />
+          </label>
+          <label style={{ fontSize: 12, color: "var(--text-muted)", fontWeight: 600 }}>
+            Workstream
+            <select value={workstream} onChange={(e) => setWorkstream(e.target.value)}>
+              <option value={UNASSIGNED}>{UNASSIGNED}</option>
+              {workstreams.map((w) => (
+                <option key={w} value={w}>
+                  {w}
+                </option>
+              ))}
+            </select>
+          </label>
+        </div>
+
+        <div className="tag-chips">
+          {selectedTags.map((name) => (
+            <TagChip
+              key={name}
+              name={name}
+              tags={tags}
+              onRemove={() => setSelectedTags((prev) => prev.filter((t) => t !== name))}
+            />
+          ))}
+          <TagPicker
+            selected={selectedTags}
+            tags={tags}
+            onChange={setSelectedTags}
+            onCreateTag={onCreateTag}
+          />
+        </div>
+
+        <div className="card-meta">
+          {sourceLink && (
+            <a className="card-link" href={sourceLink} target="_blank" rel="noreferrer">
+              ↗ Open in Slack
+            </a>
+          )}
+        </div>
+
+        <div>
+          <button
+            className="btn btn-sm btn-primary"
+            disabled={added || busy || !title.trim()}
+            onClick={() => void addToBoard()}
+          >
+            {added ? "✓ Added" : busy ? "Adding…" : "📋 Add to board"}
+          </button>
+        </div>
+      </div>
     </div>
   );
 }

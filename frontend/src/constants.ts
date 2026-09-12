@@ -17,6 +17,7 @@ export const SOURCE_ICONS: Record<TaskSource, string> = {
   meet: "🎥",
   teams: "🧑‍💻",
   manual: "✍️",
+  slack: "💬",
 };
 
 // Default palette used when a tag has no color yet (mirrors tag_store's palette

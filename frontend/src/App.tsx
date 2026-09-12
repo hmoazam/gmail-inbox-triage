@@ -183,7 +183,13 @@ export default function App() {
       )}
 
       {tab === "slack" && (
-        <SlackTriage onAuth={setNotice} onAddedToBoard={() => void data.refreshTasks()} />
+        <SlackTriage
+          onAuth={setNotice}
+          onAddedToBoard={() => void data.refreshTasks()}
+          workstreams={data.workstreams}
+          tags={data.tags}
+          onCreateTag={createTag}
+        />
       )}
 
       {modal === "workstreams" && (

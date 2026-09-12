@@ -11,17 +11,112 @@ stubbed classifier, asserting:
 """
 from __future__ import annotations
 
-import importlib
-import tempfile
+import json
 
 import pytest
 from fastapi.testclient import TestClient
 
 import config
 from gmail_client import AuthError
-from slack_client import SlackConversation, SlackMessage
+from slack_client import SlackClient, SlackConversation, SlackMessage
 from models import ThreadDecision
 import task_store
+
+
+# --- transport-level unit tests (MCP mapping/parsing, no live dbexec) --------
+
+class FakeConn:
+    """Stands in for the persistent MCP connection: records tool calls and
+    returns canned JSON text per Slack endpoint (or raises a preset error)."""
+
+    def __init__(self, responses=None, error=None):
+        self.calls: list[tuple[str, dict]] = []
+        self.responses = responses or {}
+        self.error = error
+
+    def connect(self):
+        pass
+
+    def close(self):
+        pass
+
+    def call_tool(self, tool: str, args: dict) -> str:
+        self.calls.append((tool, args))
+        if self.error is not None:
+            raise self.error
+        return self.responses[args["endpoint"]]
+
+
+def _client_with(conn) -> SlackClient:
+    sc = SlackClient()          # safe: constructs config only, launches nothing
+    sc._conn = conn
+    return sc
+
+
+def test_parse_handles_bare_and_wrapped_json():
+    bare = '{"ok": true, "channel": {"name": "x"}}'
+    assert SlackClient._parse(bare, "conversations.info")["channel"]["name"] == "x"
+
+    wrapped_str = json.dumps({"result": json.dumps({"ok": True, "v": 1})})
+    assert SlackClient._parse(wrapped_str, "m")["v"] == 1
+
+    wrapped_dict = json.dumps({"result": {"ok": True, "v": 2}})
+    assert SlackClient._parse(wrapped_dict, "m")["v"] == 2
+
+
+def test_read_maps_to_read_tool_and_parses():
+    responses = {
+        "conversations.info": json.dumps({"ok": True, "channel": {
+            "name": "team-x", "is_im": False, "last_read": "100.0"}}),
+        "conversations.history": json.dumps({"ok": True, "messages": [
+            {"user": "U1", "ts": "101.0", "text": "hi"}]}),
+        "users.info": json.dumps({"ok": True, "user": {"profile": {"real_name": "Ann"}}}),
+        "chat.getPermalink": json.dumps({"ok": True, "permalink": "http://p"}),
+    }
+    conn = FakeConn(responses=responses)
+    sc = _client_with(conn)
+    conv = sc.get_unread_conversation("C1", kind="channel")
+
+    assert conv.name == "team-x"
+    assert conv.unread_count == 1
+    assert conv.messages[0].author == "Ann"     # resolved via users.info
+    assert conv.messages[0].text == "hi"
+    assert conv.latest_ts == "101.0"
+    assert conv.permalink == "http://p"
+    # Reads went through the read tool.
+    assert all(tool == "slack_read_api_call" for tool, _ in conn.calls)
+
+
+def test_mark_read_maps_to_write_tool():
+    conn = FakeConn(responses={"conversations.mark": '{"ok": true}'})
+    sc = _client_with(conn)
+    sc.mark_read("C1", "1.2")
+    assert conn.calls == [(
+        "slack_write_api_call",
+        {"endpoint": "conversations.mark", "params": {"channel": "C1", "ts": "1.2"}},
+    )]
+
+
+def test_ok_false_auth_error_raises_autherror():
+    conn = FakeConn(responses={"auth.test": '{"ok": false, "error": "invalid_auth"}'})
+    sc = _client_with(conn)
+    with pytest.raises(AuthError):
+        sc._call("auth.test")
+
+
+def test_ok_false_nonauth_raises_runtimeerror():
+    conn = FakeConn(responses={"conversations.info": '{"ok": false, "error": "channel_not_found"}'})
+    sc = _client_with(conn)
+    with pytest.raises(RuntimeError):
+        sc._call("conversations.info", {"channel": "CZZZ"})
+
+
+def test_launch_failure_raises_autherror():
+    conn = FakeConn(error=AuthError(
+        "Slack via dbexec is unavailable — ensure dbexec is installed and authenticated."))
+    sc = _client_with(conn)
+    with pytest.raises(AuthError):
+        sc._call("auth.test")
 
 
 # --- fixtures ---------------------------------------------------------------
@@ -189,16 +284,20 @@ def test_add_to_board_title_falls_back_to_summary(client):
     assert r.json()["task"]["title"] == "FYI: launch is live"
 
 
-def test_auth_error_maps_to_401(client, monkeypatch):
+def test_dbexec_unavailable_maps_to_401(client, monkeypatch):
+    """A dbexec/MCP launch failure surfaces as AuthError → 401 with a re-auth msg."""
     tc, fake = client
 
     def boom():
-        raise AuthError("Slack API returned 401. Re-export SLACK_USER_TOKEN.")
+        raise AuthError(
+            "Slack via dbexec is unavailable — ensure dbexec is installed and "
+            "authenticated."
+        )
 
     monkeypatch.setattr(fake, "list_unread_dms", boom)
     r = tc.get("/api/slack-triage")
     assert r.status_code == 401
-    assert "SLACK_USER_TOKEN" in r.json()["detail"]
+    assert "dbexec" in r.json()["detail"]
 
 
 def test_auth_error_403_from_classifier(client, monkeypatch):

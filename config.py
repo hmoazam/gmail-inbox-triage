@@ -5,11 +5,28 @@ import json
 import os
 from pathlib import Path
 
-# Slack user OAuth token (xoxp-…), read at runtime — the app's own token, exactly
-# analogous to how Gmail uses the local gcloud ADC token. Set via SLACK_USER_TOKEN.
-# Needs user scopes: channels:read, groups:read, im:read, mpim:read,
-# channels:history, groups:history, im:history, mpim:history, users:read.
+# Slack transport: the app drives the LOCAL Slack MCP server via ``dbexec`` — the
+# Slack-app install path (xoxp user token) is blocked by ESI/IT approval. There is
+# NO Slack token to manage; dbexec refreshes its own auth silently.
+#
+# SLACK_USER_TOKEN is retained (optional, legacy) but is NOT required and NOT used
+# by the MCP transport — kept only so an operator env that still exports it does
+# not break, and so get_settings() stays stable.
 SLACK_USER_TOKEN = os.environ.get("SLACK_USER_TOKEN", "")
+
+# How slack_client launches the MCP stdio server. Defaults match the proven
+# dbexec invocation; override the args (space-separated) via SLACK_MCP_ARGS.
+SLACK_MCP_COMMAND = os.environ.get("SLACK_MCP_COMMAND", "dbexec")
+SLACK_MCP_ARGS = (
+    os.environ.get("SLACK_MCP_ARGS", "").split()
+    or ["repo", "run", "mcp", "start-single", "slack"]
+)
+# One-time MCP handshake budget (~3s in practice) and per-tool-call budget
+# (targeted calls are sub-second; a slow call surfaces as an error, not a hang).
+SLACK_MCP_CONNECT_TIMEOUT = int(os.environ.get("SLACK_MCP_CONNECT_TIMEOUT", "120"))
+SLACK_MCP_CALL_TIMEOUT = int(os.environ.get("SLACK_MCP_CALL_TIMEOUT", "30"))
+# Bounded single-page cap for DM enumeration (the one slow full-scale Slack call).
+SLACK_DM_LIMIT = int(os.environ.get("SLACK_DM_LIMIT", "100"))
 
 # Google Cloud project used for API quota/billing on every Gmail API call
 # (the gcloud Application Default Credentials auth path attributes usage to it).
@@ -196,9 +213,14 @@ def get_settings() -> dict:
         "thread_batch_size": THREAD_BATCH_SIZE,
         "per_msg_body_chars": PER_MSG_BODY_CHARS,
         "anthropic_api_key": os.environ.get("ANTHROPIC_API_KEY"),
-        # Slack triage
-        "slack_user_token": SLACK_USER_TOKEN,
+        # Slack triage (MCP-over-dbexec transport)
+        "slack_user_token": SLACK_USER_TOKEN,   # legacy/optional, unused by MCP
         "slack_categories": SLACK_CATEGORIES,
+        "slack_mcp_command": SLACK_MCP_COMMAND,
+        "slack_mcp_args": SLACK_MCP_ARGS,
+        "slack_mcp_connect_timeout": SLACK_MCP_CONNECT_TIMEOUT,
+        "slack_mcp_call_timeout": SLACK_MCP_CALL_TIMEOUT,
+        "slack_dm_limit": SLACK_DM_LIMIT,
         # Action Board
         "team_roster": TEAM_ROSTER,
         "workstreams": WORKSTREAMS,

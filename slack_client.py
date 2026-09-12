@@ -385,15 +385,18 @@ class SlackClient:
 
         if thread_ts is not None:
             endpoint = "conversations.replies"
-            params = {"channel": channel_id, "ts": thread_ts,
-                      "limit": HISTORY_LIMIT, "analysis_prompt": prompt}
+            params = {"channel": channel_id, "ts": thread_ts, "limit": HISTORY_LIMIT}
         else:
             endpoint = "conversations.history"
-            params = {"channel": channel_id,
-                      "limit": HISTORY_LIMIT, "analysis_prompt": prompt}
+            params = {"channel": channel_id, "limit": HISTORY_LIMIT}
 
+        # analysis_prompt is a TOP-LEVEL argument of the slack_read_api_call tool
+        # (a sibling of `params`, which carries Slack's own API params). Nesting
+        # it inside `params` makes the MCP ignore it and return the plain redacted
+        # summary (no JSON) -> zero actions. Keep it at the top level.
         raw = self._conn.call_tool(
-            _READ_TOOL, {"endpoint": endpoint, "params": params},
+            _READ_TOOL,
+            {"endpoint": endpoint, "params": params, "analysis_prompt": prompt},
             timeout=self._extract_timeout,
         )  # AuthError / TimeoutError / RuntimeError propagate
         return parse_extracted_actions(raw)

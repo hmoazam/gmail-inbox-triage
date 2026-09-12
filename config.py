@@ -21,12 +21,13 @@ SLACK_MCP_ARGS = (
     os.environ.get("SLACK_MCP_ARGS", "").split()
     or ["repo", "run", "mcp", "start-single", "slack"]
 )
-# One-time MCP handshake budget (~3s in practice) and per-tool-call budget
-# (targeted calls are sub-second; a slow call surfaces as an error, not a hang).
+# One-time MCP handshake budget (~3s in practice) and default per-tool-call budget
+# (targeted reads are sub-second; a slow call surfaces as an error, not a hang).
 SLACK_MCP_CONNECT_TIMEOUT = int(os.environ.get("SLACK_MCP_CONNECT_TIMEOUT", "120"))
 SLACK_MCP_CALL_TIMEOUT = int(os.environ.get("SLACK_MCP_CALL_TIMEOUT", "30"))
-# Bounded single-page cap for DM enumeration (the one slow full-scale Slack call).
-SLACK_DM_LIMIT = int(os.environ.get("SLACK_DM_LIMIT", "100"))
+# Generous budget for the ONE slow call — URL action extraction via analysis_prompt
+# (proven ~45s-2min). Overrides the default per-call timeout for that call only.
+SLACK_EXTRACT_TIMEOUT = int(os.environ.get("SLACK_EXTRACT_TIMEOUT", "180"))
 
 # Google Cloud project used for API quota/billing on every Gmail API call
 # (the gcloud Application Default Credentials auth path attributes usage to it).
@@ -117,72 +118,9 @@ WORKSTREAMS: list[str] = _load_json_list(
 )
 
 
-# ---------------------------------------------------------------------------
-# Slack triage categories (channel-ID lists per category)
-# ---------------------------------------------------------------------------
-
-def _load_json_dict(env_var: str, default: dict) -> dict:
-    """Load a JSON object (``{category: [channel_id, ...]}``) from a file path in
-    ``env_var``, or return ``default``.
-
-    Same escape-hatch pattern as ``_load_json_list``: set the env var to an
-    absolute path of a UTF-8 JSON file and restart. Silently falls back to the
-    default on any error (missing file, bad JSON, wrong root type).
-    """
-    path_str = os.environ.get(env_var, "")
-    if not path_str:
-        return default
-    try:
-        loaded = json.loads(Path(path_str).expanduser().read_text())
-        return loaded if isinstance(loaded, dict) else default
-    except Exception:
-        return default
-
-
-# Default Slack category map: {category: [channel_id, ...]}. Dict insertion order
-# IS the display order the API returns groups in ("Direct Messages" is implicit and
-# rendered first by the route). Inline comments map channel id → channel name so
-# this list is maintainable. Override entirely by pointing
-# CLEANUP_SLACK_CATEGORIES_PATH at a JSON file with the same shape.
-_DEFAULT_SLACK_CATEGORIES: dict[str, list[str]] = {
-    # TODO: 5 Slack Connect channels (Aon / AXA / Flutter / KPMG / Tesco -
-    # AI Gateway). Awaiting channel IDs from the user — empty renders no channels.
-    "AI Gateway Accounts": [],
-    "Team": [
-        "C0ADP69J1P0", "C07KW6R9JR4", "C08CEV945GE", "C0AGPHM9Z29",
-        "C0A7AA0PMMM", "C0AH9JR5GKB", "C0ABLUBHJTF",
-    ],
-    "Rolls Royce": [
-        "C04RQJ27SN9",  # team-rolls-royce
-        "C07KUHKR78B",  # team-rolls-royce-extended
-        "C097UPNJ3CK",  # team-rolls-royce-mro
-        "C08U97CAPEH",  # team-rolls-royce-one
-        "C08KTN6KWKG",  # team-rolls-royce-sap
-        "C096U18PVHU",  # team-rolls-royce-airr
-        "C0AJZK3GE3C",  # team-rolls-royce-bz-serverless
-        "C0AHR51BKEV",  # team-rolls-royce-abac-mvp
-        "C0AESU50C04",  # team-rolls-royce-abac-mvp-2
-        "C08JNNM6NV6",  # rolls-royce-core
-        "C0B2K137DK9",  # rolls-royce-fe-core
-        "C0AAG897K24",  # rolls-royce-ai-strategy-day
-        "C0B0Q1GPFCJ",  # rollsroyce-interop
-        "C099TJA76N7",  # rollsroyce-obo-cross-workspace
-        "C0BG957JFDH",  # azure-natgw-rolls-royce
-        "C0AFS7SEKFA",  # esc687-rolls-royce
-        "C0BF0TLDJ5Q",  # rr-pbi-takeout
-        "C0BPBLSDSKT",  # genie-ppai-security-rolls-royce
-    ],
-    "SME": [
-        "C05AAPK63DK", "C0BHBLZMJV9", "C0B1K1QQNSJ", "C0BN58UJXSA",
-        "C08CEFZSDE0", "C07H2H9GV7Y", "C0B3CHJ4GD6", "C09AH9FJES1",
-        "C04J6F541KJ", "C0AHMQBKRCJ",
-        "C0BPTP65AHJ",  # emea-ai-governance-epls
-        "C0BRLBK6L83",  # ai-governance-office-hours-emea
-    ],
-}
-SLACK_CATEGORIES: dict[str, list[str]] = _load_json_dict(
-    "CLEANUP_SLACK_CATEGORIES_PATH", _DEFAULT_SLACK_CATEGORIES
-)
+# NOTE: the Slack channel-ID category map (and CLEANUP_SLACK_CATEGORIES_PATH) is
+# retired — the Slack tab is now URL-driven action extraction, not a categorized
+# scan. The old map lives in git history (pre-pivot commits) if ever needed.
 
 # ---------------------------------------------------------------------------
 # Drive folder names (Phase 2/3 — Meet notes + transcript ingestion)
@@ -213,14 +151,13 @@ def get_settings() -> dict:
         "thread_batch_size": THREAD_BATCH_SIZE,
         "per_msg_body_chars": PER_MSG_BODY_CHARS,
         "anthropic_api_key": os.environ.get("ANTHROPIC_API_KEY"),
-        # Slack triage (MCP-over-dbexec transport)
+        # Slack action extraction (MCP-over-dbexec transport)
         "slack_user_token": SLACK_USER_TOKEN,   # legacy/optional, unused by MCP
-        "slack_categories": SLACK_CATEGORIES,
         "slack_mcp_command": SLACK_MCP_COMMAND,
         "slack_mcp_args": SLACK_MCP_ARGS,
         "slack_mcp_connect_timeout": SLACK_MCP_CONNECT_TIMEOUT,
         "slack_mcp_call_timeout": SLACK_MCP_CALL_TIMEOUT,
-        "slack_dm_limit": SLACK_DM_LIMIT,
+        "slack_extract_timeout": SLACK_EXTRACT_TIMEOUT,
         # Action Board
         "team_roster": TEAM_ROSTER,
         "workstreams": WORKSTREAMS,

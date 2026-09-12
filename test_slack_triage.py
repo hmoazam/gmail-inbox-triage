@@ -1,323 +1,150 @@
-"""Backend verification for the Slack triage feature — no live Slack.
+"""Backend verification for URL-driven Slack action extraction — no live dbexec.
 
-Uses FastAPI TestClient with a MOCKED slack_client (canned conversations) and a
-stubbed classifier, asserting:
-  - group assembly + ordering (Direct Messages first, then configured categories)
-  - only-unread conversations surface, and every group is emitted
-  - SlackConversationOut / decision JSON shape matches the contract
-  - mark-read
-  - add-to-board create → dedup
-  - AuthError → 401/403
+Covers:
+  - parse_slack_url: channel URL, thread URL (p-ts → dotted ts), reject non-Slack
+  - parse_extracted_actions: strip the [MCP_PRIVACY_SUMMARIZED] marker + ```json
+    fence, parse the array, coerce items, drop empties; [] on garbage
+  - POST /api/slack-triage/extract with a MOCKED slack_client.extract_actions:
+    contract shape, bad URL → 422, timeout → 504, AuthError → 401
 """
 from __future__ import annotations
-
-import json
 
 import pytest
 from fastapi.testclient import TestClient
 
-import config
 from gmail_client import AuthError
-from slack_client import SlackClient, SlackConversation, SlackMessage
-from models import ThreadDecision
-import task_store
+from slack_client import parse_slack_url, parse_extracted_actions
 
 
-# --- transport-level unit tests (MCP mapping/parsing, no live dbexec) --------
+# --- parse_slack_url --------------------------------------------------------
 
-class FakeConn:
-    """Stands in for the persistent MCP connection: records tool calls and
-    returns canned JSON text per Slack endpoint (or raises a preset error)."""
-
-    def __init__(self, responses=None, error=None):
-        self.calls: list[tuple[str, dict]] = []
-        self.responses = responses or {}
-        self.error = error
-
-    def connect(self):
-        pass
-
-    def close(self):
-        pass
-
-    def call_tool(self, tool: str, args: dict) -> str:
-        self.calls.append((tool, args))
-        if self.error is not None:
-            raise self.error
-        return self.responses[args["endpoint"]]
+def test_parse_channel_url():
+    ch, ts = parse_slack_url("https://databricks.slack.com/archives/C0ADP69J1P0")
+    assert ch == "C0ADP69J1P0"
+    assert ts is None
 
 
-def _client_with(conn) -> SlackClient:
-    sc = SlackClient()          # safe: constructs config only, launches nothing
-    sc._conn = conn
-    return sc
+def test_parse_thread_url_splits_ts():
+    ch, ts = parse_slack_url(
+        "https://databricks.slack.com/archives/C0ADP69J1P0/p1712345678123456")
+    assert ch == "C0ADP69J1P0"
+    assert ts == "1712345678.123456"
 
 
-def test_parse_handles_bare_and_wrapped_json():
-    bare = '{"ok": true, "channel": {"name": "x"}}'
-    assert SlackClient._parse(bare, "conversations.info")["channel"]["name"] == "x"
-
-    wrapped_str = json.dumps({"result": json.dumps({"ok": True, "v": 1})})
-    assert SlackClient._parse(wrapped_str, "m")["v"] == 1
-
-    wrapped_dict = json.dumps({"result": {"ok": True, "v": 2}})
-    assert SlackClient._parse(wrapped_dict, "m")["v"] == 2
+def test_parse_rejects_non_slack_url():
+    with pytest.raises(ValueError):
+        parse_slack_url("https://example.com/foo/bar")
+    with pytest.raises(ValueError):
+        parse_slack_url("")
 
 
-def test_read_maps_to_read_tool_and_parses():
-    responses = {
-        "conversations.info": json.dumps({"ok": True, "channel": {
-            "name": "team-x", "is_im": False, "last_read": "100.0"}}),
-        "conversations.history": json.dumps({"ok": True, "messages": [
-            {"user": "U1", "ts": "101.0", "text": "hi"}]}),
-        "users.info": json.dumps({"ok": True, "user": {"profile": {"real_name": "Ann"}}}),
-        "chat.getPermalink": json.dumps({"ok": True, "permalink": "http://p"}),
-    }
-    conn = FakeConn(responses=responses)
-    sc = _client_with(conn)
-    conv = sc.get_unread_conversation("C1", kind="channel")
+# --- parse_extracted_actions ------------------------------------------------
 
-    assert conv.name == "team-x"
-    assert conv.unread_count == 1
-    assert conv.messages[0].author == "Ann"     # resolved via users.info
-    assert conv.messages[0].text == "hi"
-    assert conv.latest_ts == "101.0"
-    assert conv.permalink == "http://p"
-    # Reads went through the read tool.
-    assert all(tool == "slack_read_api_call" for tool, _ in conn.calls)
+def test_parse_marker_and_json_fence():
+    raw = (
+        "[MCP_PRIVACY_SUMMARIZED] I analyzed the conversation.\n\n"
+        "```json\n"
+        '[{"task": "Reply to Bob with the design doc", '
+        '"context": "Bob asked in-thread", "due": "2026-09-20"},'
+        '{"task": "Book the review slot", "context": "before Friday", "due": null}]'
+        "\n```"
+    )
+    actions = parse_extracted_actions(raw)
+    assert actions == [
+        {"task": "Reply to Bob with the design doc",
+         "context": "Bob asked in-thread", "due": "2026-09-20"},
+        {"task": "Book the review slot", "context": "before Friday", "due": None},
+    ]
 
 
-def test_mark_read_maps_to_write_tool():
-    conn = FakeConn(responses={"conversations.mark": '{"ok": true}'})
-    sc = _client_with(conn)
-    sc.mark_read("C1", "1.2")
-    assert conn.calls == [(
-        "slack_write_api_call",
-        {"endpoint": "conversations.mark", "params": {"channel": "C1", "ts": "1.2"}},
-    )]
+def test_parse_bare_array_and_coercion():
+    # No marker, no fence; non-string due and an empty-task item get coerced/dropped.
+    raw = '[{"task": "Do X", "due": 123}, {"task": "  ", "context": "skip"}]'
+    assert parse_extracted_actions(raw) == [{"task": "Do X", "context": "", "due": None}]
 
 
-def test_ok_false_auth_error_raises_autherror():
-    conn = FakeConn(responses={"auth.test": '{"ok": false, "error": "invalid_auth"}'})
-    sc = _client_with(conn)
-    with pytest.raises(AuthError):
-        sc._call("auth.test")
+def test_parse_empty_and_garbage_return_empty():
+    assert parse_extracted_actions("[MCP_PRIVACY_SUMMARIZED] none found\n\n[]") == []
+    assert parse_extracted_actions("not json at all") == []
+    assert parse_extracted_actions("") == []
 
 
-def test_ok_false_nonauth_raises_runtimeerror():
-    conn = FakeConn(responses={"conversations.info": '{"ok": false, "error": "channel_not_found"}'})
-    sc = _client_with(conn)
-    with pytest.raises(RuntimeError):
-        sc._call("conversations.info", {"channel": "CZZZ"})
-
-
-def test_launch_failure_raises_autherror():
-    conn = FakeConn(error=AuthError(
-        "Slack via dbexec is unavailable — ensure dbexec is installed and authenticated."))
-    sc = _client_with(conn)
-    with pytest.raises(AuthError):
-        sc._call("auth.test")
-
-
-# --- fixtures ---------------------------------------------------------------
+# --- route: POST /api/slack-triage/extract ----------------------------------
 
 @pytest.fixture()
-def isolated_store(monkeypatch, tmp_path):
-    """Point task_store at a temp file so add-to-board dedup is deterministic."""
-    monkeypatch.setattr(task_store, "STORE_PATH", tmp_path / "tasks.json")
-    yield
-
-
-@pytest.fixture()
-def client(monkeypatch, isolated_store):
+def client(monkeypatch):
     from api import deps
     from api.routes import slack_triage
-    import classifier
 
-    # Small, ordered category map so we can assert ordering precisely.
-    cats = {"AI Gateway Accounts": [], "Team": ["C_TEAM"], "Rolls Royce": [], "SME": []}
-    settings = {
-        **config.get_settings(),
-        "slack_categories": cats,
-        "user_name": "Hanna",
-        "backend": "claude_cli",
-        "model": "",
-        "per_msg_body_chars": 6000,
-    }
-    monkeypatch.setattr(deps, "get_app_settings", lambda: settings)
-
-    # --- mocked slack client -------------------------------------------------
-    dm = SlackConversation(
-        id="D1", kind="im", name="Alice Example",
-        messages=[SlackMessage(author="Alice Example", ts="1.1", text="ping?")],
-        latest_ts="1.1", permalink="https://slack.example/D1",
-    )
-    ch = SlackConversation(
-        id="C_TEAM", kind="channel", name="team-standup",
-        messages=[SlackMessage(author="Bob", ts="2.1", text="deploy done")],
-        latest_ts="2.1", permalink="https://slack.example/C_TEAM",
-    )
-
-    class FakeSlack:
-        def list_unread_dms(self):
-            return [dm]
-
-        def list_unread_in_channels(self, channel_ids):
-            return [ch] if "C_TEAM" in channel_ids else []
-
-        def mark_read(self, channel_id, ts):
-            self.marked = (channel_id, ts)
-            return None
-
-    fake = FakeSlack()
-    monkeypatch.setattr(deps, "get_slack_client", lambda: fake)
-    monkeypatch.setattr(slack_triage, "get_slack_client", lambda: fake)
+    settings = {"user_name": "Hanna", "user_email": "hanna@example.com"}
     monkeypatch.setattr(slack_triage, "get_app_settings", lambda: settings)
 
-    # --- stubbed classifier --------------------------------------------------
-    def fake_classify(conv, settings, stats=None):
-        if stats is not None:
-            stats.add(10, 5, None)
-        return ThreadDecision(
-            thread_id=conv.id, category="action_required",
-            customer_related=True, internal_only=False, needs_response=True,
-            action_on_me=f"Reply in {conv.name}", summary=f"summary for {conv.name}",
-            confidence=0.9,
-        )
+    class FakeSlack:
+        def __init__(self):
+            self.calls = []
+            self.result = [{"task": "Reply to Bob", "context": "asked in-thread",
+                            "due": "2026-09-20"}]
+            self.error = None
 
-    monkeypatch.setattr(slack_triage, "classify_slack_conversation", fake_classify)
+        def extract_actions(self, url, user_name=None):
+            self.calls.append((url, user_name))
+            if self.error is not None:
+                raise self.error
+            return self.result
+
+    fake = FakeSlack()
+    monkeypatch.setattr(slack_triage, "get_slack_client", lambda: fake)
 
     from api.main import app
     return TestClient(app), fake
 
 
-# --- tests ------------------------------------------------------------------
-
-def test_group_assembly_and_ordering(client):
-    tc, _ = client
-    r = tc.get("/api/slack-triage")
+def test_extract_contract_shape(client):
+    tc, fake = client
+    url = "https://databricks.slack.com/archives/C0ADP69J1P0/p1712345678123456"
+    r = tc.post("/api/slack-triage/extract", json={"url": url})
     assert r.status_code == 200
     body = r.json()
-
-    # Groups present in the fixed order, DMs first.
-    assert [g["category"] for g in body["groups"]] == [
-        "Direct Messages", "AI Gateway Accounts", "Team", "Rolls Royce", "SME",
+    assert set(body.keys()) == {"source_link", "actions"}
+    assert body["source_link"] == url
+    assert body["actions"] == [
+        {"task": "Reply to Bob", "context": "asked in-thread", "due": "2026-09-20"}
     ]
-
-    dm_group = body["groups"][0]
-    assert len(dm_group["conversations"]) == 1
-    conv = dm_group["conversations"][0]
-
-    # SlackConversationOut shape.
-    assert set(conv.keys()) == {
-        "id", "kind", "name", "unread_count", "messages",
-        "latest_ts", "permalink", "decision",
-    }
-    assert conv["id"] == "D1"
-    assert conv["kind"] == "im"
-    assert conv["unread_count"] == 1
-    assert conv["messages"] == [{"author": "Alice Example", "ts": "1.1", "text": "ping?"}]
-    assert conv["latest_ts"] == "1.1"
-    assert conv["permalink"] == "https://slack.example/D1"
-
-    # Nested decision shape — exactly the 7 contract fields (no thread_id).
-    assert set(conv["decision"].keys()) == {
-        "category", "summary", "action_on_me", "customer_related",
-        "internal_only", "needs_response", "confidence",
-    }
-    assert conv["decision"]["category"] == "action_required"
-    assert conv["decision"]["action_on_me"] == "Reply in Alice Example"
-
-    # Team group has the channel; empty categories are still emitted, empty.
-    team = next(g for g in body["groups"] if g["category"] == "Team")
-    assert [c["id"] for c in team["conversations"]] == ["C_TEAM"]
-    empties = [g for g in body["groups"] if g["category"] in ("AI Gateway Accounts", "Rolls Royce", "SME")]
-    assert all(g["conversations"] == [] for g in empties)
-
-    # Usage accumulated across the two classified conversations.
-    assert body["usage"]["claude_calls"] == 2
-    assert body["usage"]["input_tokens"] == 20
+    # The account owner is passed through to the extractor.
+    assert fake.calls == [(url, "Hanna")]
 
 
-def test_mark_read(client):
+def test_extract_empty_actions(client):
     tc, fake = client
-    r = tc.post("/api/slack-triage/mark-read", json={"channel_id": "C_TEAM", "ts": "2.1"})
+    fake.result = []
+    r = tc.post("/api/slack-triage/extract",
+                json={"url": "https://x.slack.com/archives/C1"})
     assert r.status_code == 200
-    assert r.json() == {"ok": True}
-    assert fake.marked == ("C_TEAM", "2.1")
+    assert r.json()["actions"] == []
 
 
-def test_add_to_board_create_then_dedup(client):
-    tc, _ = client
-    payload = {
-        "channel_id": "C_TEAM", "name": "team-standup",
-        "permalink": "https://slack.example/C_TEAM",
-        "summary": "deploy discussion", "action_on_me": "Reply to Bob about deploy",
-        "customer_related": False, "needs_response": True, "confidence": 0.8,
-    }
-    r1 = tc.post("/api/slack-triage/add-to-board", json=payload)
-    assert r1.status_code == 200
-    b1 = r1.json()
-    assert b1["created"] is True
-    assert b1["task"]["source"] == "slack"
-    assert b1["task"]["source_ref"] == "C_TEAM"
-    assert b1["task"]["title"] == "Reply to Bob about deploy"
-    assert b1["task"]["assignee"] == "Hanna"        # default owner
-
-    # Second identical call → dedup hit, same task, created=False.
-    r2 = tc.post("/api/slack-triage/add-to-board", json=payload)
-    assert r2.status_code == 200
-    b2 = r2.json()
-    assert b2["created"] is False
-    assert b2["task"]["id"] == b1["task"]["id"]
-
-
-def test_add_to_board_title_falls_back_to_summary(client):
-    tc, _ = client
-    payload = {
-        "channel_id": "D9", "name": "Zed", "permalink": None,
-        "summary": "FYI: launch is live", "action_on_me": None,
-        "customer_related": False, "needs_response": False, "confidence": 0.5,
-    }
-    r = tc.post("/api/slack-triage/add-to-board", json=payload)
-    assert r.status_code == 200
-    assert r.json()["task"]["title"] == "FYI: launch is live"
-
-
-def test_dbexec_unavailable_maps_to_401(client, monkeypatch):
-    """A dbexec/MCP launch failure surfaces as AuthError → 401 with a re-auth msg."""
+def test_extract_bad_url_maps_to_422(client):
     tc, fake = client
+    fake.error = ValueError("Not a Slack conversation URL: 'nope'.")
+    r = tc.post("/api/slack-triage/extract", json={"url": "nope"})
+    assert r.status_code == 422
+    assert "Slack" in r.json()["detail"]
 
-    def boom():
-        raise AuthError(
-            "Slack via dbexec is unavailable — ensure dbexec is installed and "
-            "authenticated."
-        )
 
-    monkeypatch.setattr(fake, "list_unread_dms", boom)
-    r = tc.get("/api/slack-triage")
+def test_extract_timeout_maps_to_504(client):
+    tc, fake = client
+    fake.error = TimeoutError("Slack MCP tool timed out after 180s.")
+    r = tc.post("/api/slack-triage/extract",
+                json={"url": "https://x.slack.com/archives/C1"})
+    assert r.status_code == 504
+    assert "timed out" in r.json()["detail"]
+
+
+def test_extract_auth_error_maps_to_401(client):
+    tc, fake = client
+    fake.error = AuthError(
+        "Slack via dbexec is unavailable — ensure dbexec is installed and authenticated.")
+    r = tc.post("/api/slack-triage/extract",
+                json={"url": "https://x.slack.com/archives/C1"})
     assert r.status_code == 401
     assert "dbexec" in r.json()["detail"]
-
-
-def test_auth_error_403_from_classifier(client, monkeypatch):
-    tc, _ = client
-    from api.routes import slack_triage
-
-    def boom(conv, settings, stats=None):
-        raise AuthError("Slack API returned 403 (missing_scope).")
-
-    monkeypatch.setattr(slack_triage, "classify_slack_conversation", boom)
-    r = tc.get("/api/slack-triage")
-    assert r.status_code == 403
-
-
-def test_mark_read_auth_error_403(client, monkeypatch):
-    tc, fake = client
-
-    def boom(channel_id, ts):
-        raise AuthError("Slack API returned 403. token_expired.")
-
-    monkeypatch.setattr(fake, "mark_read", boom)
-    r = tc.post("/api/slack-triage/mark-read", json={"channel_id": "C", "ts": "1"})
-    assert r.status_code == 403

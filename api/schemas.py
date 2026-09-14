@@ -28,6 +28,7 @@ class TaskOut(BaseModel):
     created_at: str
     updated_at: str
     due_date: str | None = None
+    planned_day: str | None = None
     source_ref: str | None = None
     source_link: str | None = None
     context: str = ""
@@ -51,6 +52,7 @@ class TaskCreate(BaseModel):
     status: str = TASK_STATUS_TODO
     source: str = TASK_SOURCE_MANUAL
     due_date: str | None = None          # "YYYY-MM-DD"
+    planned_day: str | None = None       # PLANNED_DAYS value, or None = Backlog
     source_ref: str | None = None
     source_link: str | None = None
     context: str = ""
@@ -73,6 +75,7 @@ class TaskPatch(BaseModel):
     workstream: str | None = None
     context: str | None = None
     due_date: str | None = None
+    planned_day: str | None = None
     tags: list[str] | None = None
     customer_related: bool | None = None
     confidence: float | None = None

@@ -9,7 +9,7 @@ from fastapi import APIRouter, HTTPException, Query, Response, status as http_st
 
 import tag_store
 import task_store
-from models import TASK_STATUSES
+from models import TASK_STATUSES, PLANNED_DAYS
 from api.deps import parse_due_date
 from api.schemas import TaskCreate, TaskOut, TaskPatch
 
@@ -45,6 +45,8 @@ def create_task(body: TaskCreate) -> TaskOut:
         raise HTTPException(status_code=422, detail="title is required")
     if body.status not in TASK_STATUSES:
         raise HTTPException(status_code=422, detail=f"invalid status {body.status!r}")
+    if body.planned_day is not None and body.planned_day not in PLANNED_DAYS:
+        raise HTTPException(status_code=422, detail=f"invalid planned_day {body.planned_day!r}")
     _register_tags(body.tags)
     task = task_store.new_task(
         title=body.title.strip(),
@@ -53,6 +55,7 @@ def create_task(body: TaskCreate) -> TaskOut:
         status=body.status,
         source=body.source,
         due_date=parse_due_date(body.due_date),
+        planned_day=body.planned_day,
         source_ref=body.source_ref,
         source_link=body.source_link,
         context=body.context,
@@ -78,6 +81,10 @@ def patch_task(task_id: str, body: TaskPatch) -> TaskOut:
 
     if "status" in fields and fields["status"] not in TASK_STATUSES:
         raise HTTPException(status_code=422, detail=f"invalid status {fields['status']!r}")
+    # planned_day: a PLANNED_DAYS value, or explicit null to send to Backlog.
+    if "planned_day" in fields and fields["planned_day"] is not None \
+            and fields["planned_day"] not in PLANNED_DAYS:
+        raise HTTPException(status_code=422, detail=f"invalid planned_day {fields['planned_day']!r}")
     # due_date arrives as a string (or explicit null to clear it).
     if "due_date" in fields:
         fields["due_date"] = parse_due_date(fields["due_date"])

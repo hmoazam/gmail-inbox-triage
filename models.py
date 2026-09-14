@@ -111,6 +111,10 @@ TASK_SOURCES = (
     TASK_SOURCE_SLACK,
 )
 
+# Weekday a task is planned for on the board — abstract (Mon–Fri), decoupled from
+# due_date. None = Backlog (unscheduled). Dragging a card onto a day sets this.
+PLANNED_DAYS = ("mon", "tue", "wed", "thu", "fri")
+
 
 @dataclass
 class Task:
@@ -132,6 +136,7 @@ class Task:
 
     # --- optional ---
     due_date: date | None = None       # date only (no time); YYYY-MM-DD in JSON
+    planned_day: str | None = None     # PLANNED_DAYS value, or None = Backlog
     source_ref: str | None = None      # thread_id (email) or file_id (transcript)
     source_link: str | None = None     # Gmail thread URL or Drive doc URL
     context: str = ""                  # short explanation / excerpt

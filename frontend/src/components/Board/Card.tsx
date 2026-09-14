@@ -37,17 +37,22 @@ export function Card({
   const [editingDue, setEditingDue] = useState(false);
   const { attributes, listeners, setNodeRef, transform, isDragging } = useDraggable({
     id: task.id,
-    data: { status: task.status },
+    // Drag between day columns moves planned_day; carry the source day so the
+    // Board can skip a no-op PATCH when dropped back on the same column.
+    data: { plannedDay: task.planned_day },
   });
 
   const style = transform ? { transform: CSS.Translate.toString(transform) } : undefined;
   const isTeammateTask = task.assignee !== ME && task.assignee !== "unassigned";
+  const isDone = task.status === "done";
 
   return (
     <div
       ref={setNodeRef}
       style={style}
-      className={`card${task.overdue ? " overdue" : ""}${isDragging ? " dragging" : ""}`}
+      className={`card${task.overdue ? " overdue" : ""}${isDragging ? " dragging" : ""}${
+        isDone ? " done" : ""
+      }`}
     >
       <div className="card-top">
         {/* Drag handle isolates DnD from the inline controls below. */}
@@ -72,8 +77,8 @@ export function Card({
           </span>
         )}
         {task.customer_related && <span className="badge">🧑‍💼 Customer</span>}
-        <span className="badge">{task.assignee}</span>
-        <span className="badge">{task.workstream}</span>
+        <span className="badge" title="Owner">👤 {task.assignee}</span>
+        <span className="badge" title="Workstream">🗂️ {task.workstream}</span>
       </div>
 
       <div className="tag-chips">

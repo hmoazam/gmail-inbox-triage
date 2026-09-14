@@ -1,5 +1,5 @@
 import type { Task, TaskFilters } from "./types";
-import { ME, ROSTER_FALLBACK, UNASSIGNED } from "./constants";
+import { ROSTER_FALLBACK, UNASSIGNED } from "./constants";
 
 /** Format a YYYY-MM-DD date string as e.g. "Mar 04". */
 export function formatDueDate(due: string | null): string {
@@ -38,38 +38,6 @@ export function applyFilters(tasks: Task[], f: TaskFilters): Task[] {
     }
     return true;
   });
-}
-
-/**
- * Ordered list of assignee lane keys for By-Person view: ME first, then the
- * rest of the roster, then any extra assignees seen on tasks, then unassigned.
- */
-export function personLaneOrder(tasks: Task[], roster: string[]): string[] {
-  const order: string[] = [];
-  const push = (name: string) => {
-    if (!order.includes(name)) order.push(name);
-  };
-  push(ME);
-  for (const name of roster) if (name !== ME) push(name);
-  for (const t of tasks) if (t.assignee && t.assignee !== UNASSIGNED) push(t.assignee);
-  push(UNASSIGNED);
-  return order;
-}
-
-/**
- * Ordered list of workstream lane keys for By-Workstream view: configured
- * workstreams first (in registry order), then any extra seen on tasks, then
- * unassigned last.
- */
-export function workstreamLaneOrder(tasks: Task[], workstreams: string[]): string[] {
-  const order: string[] = [];
-  const push = (name: string) => {
-    if (!order.includes(name)) order.push(name);
-  };
-  for (const ws of workstreams) if (ws !== UNASSIGNED) push(ws);
-  for (const t of tasks) if (t.workstream && t.workstream !== UNASSIGNED) push(t.workstream);
-  push(UNASSIGNED);
-  return order;
 }
 
 /** Union of the roster and any assignees present on tasks (for dropdowns). */

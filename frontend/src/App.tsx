@@ -2,7 +2,7 @@ import { useMemo, useState } from "react";
 import { api } from "./api/client";
 import { useAppData } from "./hooks/useAppData";
 import { applyFilters, assigneeOptions } from "./utils";
-import { ApiError, type Task, type TaskFilters, type ViewMode } from "./types";
+import { ApiError, type Task, type TaskFilters } from "./types";
 import { Board } from "./components/Board/Board";
 import { FilterBar } from "./components/FilterBar";
 import { Triage } from "./components/Triage/Triage";
@@ -28,7 +28,6 @@ type Modal = "workstreams" | "tags" | "add" | null;
 export default function App() {
   const data = useAppData();
   const [tab, setTab] = useState<Tab>("board");
-  const [view, setView] = useState<ViewMode>("person");
   const [filters, setFilters] = useState<TaskFilters>(EMPTY_FILTERS);
   const [modal, setModal] = useState<Modal>(null);
   const [notice, setNotice] = useState<string | null>(null);
@@ -100,20 +99,6 @@ export default function App() {
 
         {tab === "board" && (
           <>
-            <div className="toggle-group" role="group" aria-label="Group by">
-              <button
-                className={view === "person" ? "active" : ""}
-                onClick={() => setView("person")}
-              >
-                By Person
-              </button>
-              <button
-                className={view === "workstream" ? "active" : ""}
-                onClick={() => setView("workstream")}
-              >
-                By Workstream
-              </button>
-            </div>
             <button className="btn" onClick={() => setModal("add")}>
               ➕ Add task
             </button>
@@ -164,10 +149,8 @@ export default function App() {
             <Board
               tasks={filtered}
               tags={data.tags}
-              viewMode={view}
-              workstreams={data.workstreams}
-              roster={data.roster}
               onStatusChange={(id, status) => void data.moveTask(id, status)}
+              onDayChange={(id, day) => void data.moveTaskDay(id, day)}
               onDueChange={(id, due) => void data.patchTask(id, { due_date: due })}
               onTagsChange={(id, tags) => void data.patchTask(id, { tags })}
               onDelete={(id) => void data.deleteTask(id)}

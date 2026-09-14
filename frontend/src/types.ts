@@ -18,6 +18,18 @@ export type TaskSource = (typeof TASK_SOURCES)[number];
 export const TRIAGE_CATEGORIES = ["action_required", "useful", "other"] as const;
 export type TriageCategory = (typeof TRIAGE_CATEGORIES)[number];
 
+// Planned weekday for the board's day columns. `null` on a task = Backlog.
+export const PLANNED_DAYS = ["mon", "tue", "wed", "thu", "fri"] as const;
+export type PlannedDay = (typeof PLANNED_DAYS)[number];
+
+export const PLANNED_DAY_LABELS: Record<PlannedDay, string> = {
+  mon: "Monday",
+  tue: "Tuesday",
+  wed: "Wednesday",
+  thu: "Thursday",
+  fri: "Friday",
+};
+
 export const TRIAGE_CATEGORY_LABELS: Record<TriageCategory, string> = {
   action_required: "Action Required",
   useful: "Useful",
@@ -51,6 +63,7 @@ export interface Task {
   completed_at: string | null; // ISO-8601 UTC
   tags: string[];
   overdue: boolean; // derived (see note above)
+  planned_day: PlannedDay | null; // board day column; null = Backlog
 }
 
 /** Fields accepted when creating a task (POST /api/tasks). */
@@ -67,6 +80,7 @@ export interface TaskCreate {
   customer_related?: boolean;
   confidence?: number;
   tags?: string[];
+  planned_day?: PlannedDay | null;
 }
 
 /** Fields accepted on PATCH /api/tasks/{id} (all optional). */
@@ -79,6 +93,7 @@ export interface TaskPatch {
   context?: string;
   tags?: string[];
   customer_related?: boolean;
+  planned_day?: PlannedDay | null;
 }
 
 /** A tag registry entry: name → hex color (tag_store.py). */
@@ -212,9 +227,6 @@ export interface DraftResponse {
   draft_id: string;
   draft_link?: string | null;
 }
-
-/** Board grouping mode — client-side pivot over the same task data. */
-export type ViewMode = "person" | "workstream";
 
 /** Client-side filter state applied to the task list. */
 export interface TaskFilters {

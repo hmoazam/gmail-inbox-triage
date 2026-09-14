@@ -253,6 +253,14 @@ button {
   padding: 12px;
 }
 
+/* Day board: a single row of 6 columns (Mon–Fri + Backlog). */
+.day-columns {
+  display: grid;
+  grid-template-columns: repeat(6, minmax(200px, 1fr));
+  gap: 10px;
+  align-items: start;
+}
+
 .column {
   background: var(--surface-2);
   border-radius: var(--radius);
@@ -304,6 +312,16 @@ button {
 
 .card.dragging {
   opacity: 0.5;
+}
+
+/* Done tasks are dimmed with a struck-through title. */
+.card.done {
+  opacity: 0.6;
+}
+
+.card.done .card-title {
+  text-decoration: line-through;
+  color: var(--text-muted);
 }
 
 .card-top {

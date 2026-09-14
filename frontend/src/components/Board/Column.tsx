@@ -1,32 +1,42 @@
 import type { ReactNode } from "react";
 import { useDroppable } from "@dnd-kit/core";
-import { TASK_STATUS_LABELS, type TaskStatus } from "../../types";
+import type { PlannedDay } from "../../types";
+
+/** A board column key: a weekday or the catch-all Backlog. */
+export type ColumnKey = PlannedDay | "backlog";
 
 interface Props {
-  status: TaskStatus;
+  columnKey: ColumnKey;
+  label: string;
   count: number;
   children: ReactNode;
 }
 
-const STATUS_ICONS: Record<TaskStatus, string> = {
-  todo: "📋",
-  in_progress: "⚡",
-  done: "✅",
+const COLUMN_ICONS: Record<ColumnKey, string> = {
+  mon: "🗓️",
+  tue: "🗓️",
+  wed: "🗓️",
+  thu: "🗓️",
+  fri: "🗓️",
+  backlog: "📥",
 };
 
-/** A board column = one real status. Dropping a card here sets that status. */
-export function Column({ status, count, children }: Props) {
+/**
+ * A board column = one weekday (or Backlog). Dropping a card here sets the
+ * task's planned_day to this weekday, or null for Backlog.
+ */
+export function Column({ columnKey, label, count, children }: Props) {
   // Droppable id is namespaced so it never collides with a task (card) id.
   const { setNodeRef, isOver } = useDroppable({
-    id: `col:${status}`,
-    data: { status },
+    id: `col:${columnKey}`,
+    data: { columnKey },
   });
 
   return (
     <div ref={setNodeRef} className={`column${isOver ? " drop-over" : ""}`}>
       <div className="column-title">
         <span>
-          {STATUS_ICONS[status]} {TASK_STATUS_LABELS[status]}
+          {COLUMN_ICONS[columnKey]} {label}
         </span>
         <span>{count}</span>
       </div>

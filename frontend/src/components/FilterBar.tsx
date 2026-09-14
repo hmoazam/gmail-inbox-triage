@@ -33,7 +33,7 @@ export function FilterBar({ filters, onChange, assignees, workstreams, tags }: P
       </label>
 
       <label>
-        Person
+        Owner
         <select
           value={filters.assignee ?? ""}
           onChange={(e) => set("assignee", e.target.value || null)}

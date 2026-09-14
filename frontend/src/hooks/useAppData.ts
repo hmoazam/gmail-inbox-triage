@@ -20,8 +20,10 @@ interface AppData {
   createTask: (body: TaskCreate) => Promise<Task | null>;
   patchTask: (id: string, body: TaskPatch) => Promise<Task | null>;
   deleteTask: (id: string) => Promise<boolean>;
-  /** Optimistic status move for DnD; reverts on failure. */
+  /** Optimistic status change (card status control); reverts on failure. */
   moveTask: (id: string, status: Task["status"]) => Promise<void>;
+  /** Optimistic planned-day move for DnD between day columns; reverts on failure. */
+  moveTaskDay: (id: string, plannedDay: Task["planned_day"]) => Promise<void>;
 }
 
 export function useAppData(): AppData {
@@ -147,6 +149,22 @@ export function useAppData(): AppData {
     [tasks, handleErr],
   );
 
+  const moveTaskDay = useCallback(
+    async (id: string, plannedDay: Task["planned_day"]): Promise<void> => {
+      const prev = tasks;
+      // Optimistic: reflect the new day column immediately for a snappy DnD feel.
+      setTasks((cur) => cur.map((t) => (t.id === id ? { ...t, planned_day: plannedDay } : t)));
+      try {
+        const updated = await api.patchTask(id, { planned_day: plannedDay });
+        setTasks((cur) => cur.map((t) => (t.id === id ? updated : t)));
+      } catch (err) {
+        setTasks(prev); // revert on failure
+        handleErr(err);
+      }
+    },
+    [tasks, handleErr],
+  );
+
   return {
     tasks,
     workstreams,
@@ -163,5 +181,6 @@ export function useAppData(): AppData {
     patchTask,
     deleteTask,
     moveTask,
+    moveTaskDay,
   };
 }

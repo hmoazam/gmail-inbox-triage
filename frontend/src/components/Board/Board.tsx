@@ -21,6 +21,8 @@ interface Props {
   tasks: Task[]; // already filtered
   tags: Tag[];
   onStatusChange: (id: string, status: TaskStatus) => void;
+  onTitleChange: (id: string, title: string) => void;
+  onContextChange: (id: string, context: string) => void;
   onDayChange: (id: string, plannedDay: PlannedDay | null) => void;
   onDueChange: (id: string, due: string | null) => void;
   onTagsChange: (id: string, tags: string[]) => void;
@@ -39,6 +41,8 @@ export function Board({
   tasks,
   tags,
   onStatusChange,
+  onTitleChange,
+  onContextChange,
   onDayChange,
   onDueChange,
   onTagsChange,
@@ -83,6 +87,8 @@ export function Board({
                     task={task}
                     tags={tags}
                     onStatusChange={(s) => onStatusChange(task.id, s)}
+                    onTitleChange={(t) => onTitleChange(task.id, t)}
+                    onContextChange={(c) => onContextChange(task.id, c)}
                     onDueChange={(d) => onDueChange(task.id, d)}
                     onTagsChange={(t) => onTagsChange(task.id, t)}
                     onDelete={() => onDelete(task.id)}

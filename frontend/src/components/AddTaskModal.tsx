@@ -17,6 +17,7 @@ interface Props {
 /** Manual "Add task" form (mirrors the Streamlit add-task expander). */
 export function AddTaskModal({ assignees, workstreams, onClose, onCreate }: Props) {
   const [title, setTitle] = useState("");
+  const [notes, setNotes] = useState("");
   const [assignee, setAssignee] = useState(assignees[0] ?? UNASSIGNED);
   const [workstream, setWorkstream] = useState(UNASSIGNED);
   const [dueDate, setDueDate] = useState("");
@@ -33,6 +34,7 @@ export function AddTaskModal({ assignees, workstreams, onClose, onCreate }: Prop
     setError(null);
     const created = await onCreate({
       title: title.trim(),
+      context: notes.trim(),
       assignee,
       workstream,
       status,
@@ -62,6 +64,15 @@ export function AddTaskModal({ assignees, workstreams, onClose, onCreate }: Prop
               autoFocus
               onChange={(e) => setTitle(e.target.value)}
               onKeyDown={(e) => e.key === "Enter" && void submit()}
+            />
+          </label>
+          <label>
+            Details / notes
+            <textarea
+              rows={4}
+              value={notes}
+              placeholder="Optional — add more detail or notes for this task"
+              onChange={(e) => setNotes(e.target.value)}
             />
           </label>
         </div>

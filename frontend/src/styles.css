@@ -343,6 +343,48 @@ button {
   font-weight: 600;
   flex: 1;
   word-break: break-word;
+  cursor: text;
+}
+
+.card-title-edit {
+  flex: 1;
+  font: inherit;
+  font-weight: 600;
+  padding: 2px 4px;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  background: var(--surface);
+  color: inherit;
+}
+
+.card .thread-summary {
+  cursor: text;
+}
+
+.card-notes-edit {
+  width: 100%;
+  font: inherit;
+  font-size: 12px;
+  padding: 6px;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  background: var(--surface);
+  color: inherit;
+  resize: vertical;
+}
+
+.card-add-notes {
+  align-self: flex-start;
+  background: none;
+  border: none;
+  color: var(--text-muted);
+  font-size: 12px;
+  cursor: pointer;
+  padding: 2px 0;
+}
+.card-add-notes:hover {
+  color: var(--accent);
+  text-decoration: underline;
 }
 
 .card-meta {

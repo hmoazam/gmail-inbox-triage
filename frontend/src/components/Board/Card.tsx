@@ -17,6 +17,8 @@ interface Props {
   task: Task;
   tags: Tag[];
   onStatusChange: (status: TaskStatus) => void;
+  onTitleChange: (title: string) => void;
+  onContextChange: (context: string) => void;
   onDueChange: (due: string | null) => void;
   onTagsChange: (tags: string[]) => void;
   onDelete: () => void;
@@ -28,6 +30,8 @@ export function Card({
   task,
   tags,
   onStatusChange,
+  onTitleChange,
+  onContextChange,
   onDueChange,
   onTagsChange,
   onDelete,
@@ -35,6 +39,20 @@ export function Card({
   onCreateTag,
 }: Props) {
   const [editingDue, setEditingDue] = useState(false);
+  const [editingTitle, setEditingTitle] = useState(false);
+  const [titleDraft, setTitleDraft] = useState(task.title);
+  const [editingNotes, setEditingNotes] = useState(false);
+  const [notesDraft, setNotesDraft] = useState(task.context);
+
+  const saveTitle = () => {
+    setEditingTitle(false);
+    const v = titleDraft.trim();
+    if (v && v !== task.title) onTitleChange(v);
+  };
+  const saveNotes = () => {
+    setEditingNotes(false);
+    if (notesDraft !== task.context) onContextChange(notesDraft);
+  };
   const { attributes, listeners, setNodeRef, transform, isDragging } = useDraggable({
     id: task.id,
     // Drag between day columns moves planned_day; carry the source day so the
@@ -60,13 +78,67 @@ export function Card({
           ⠿
         </span>
         <span title={task.source}>{SOURCE_ICONS[task.source]}</span>
-        <span className="card-title">{task.title}</span>
+        {editingTitle ? (
+          <input
+            className="card-title-edit"
+            value={titleDraft}
+            autoFocus
+            onChange={(e) => setTitleDraft(e.target.value)}
+            onBlur={saveTitle}
+            onKeyDown={(e) => {
+              if (e.key === "Enter") saveTitle();
+              else if (e.key === "Escape") setEditingTitle(false);
+            }}
+          />
+        ) : (
+          <span
+            className="card-title"
+            title="Click to edit"
+            onClick={() => {
+              setTitleDraft(task.title);
+              setEditingTitle(true);
+            }}
+          >
+            {task.title}
+          </span>
+        )}
       </div>
 
-      {task.context && (
-        <div className="thread-summary" title={task.context}>
+      {editingNotes ? (
+        <textarea
+          className="card-notes-edit"
+          rows={3}
+          value={notesDraft}
+          autoFocus
+          placeholder="Add details or notes…"
+          onChange={(e) => setNotesDraft(e.target.value)}
+          onBlur={saveNotes}
+          onKeyDown={(e) => {
+            if (e.key === "Escape") setEditingNotes(false);
+          }}
+        />
+      ) : task.context ? (
+        <div
+          className="thread-summary"
+          title="Click to edit notes"
+          onClick={() => {
+            setNotesDraft(task.context);
+            setEditingNotes(true);
+          }}
+        >
           {task.context.length > 140 ? `${task.context.slice(0, 140)}…` : task.context}
         </div>
+      ) : (
+        <button
+          type="button"
+          className="card-add-notes"
+          onClick={() => {
+            setNotesDraft("");
+            setEditingNotes(true);
+          }}
+        >
+          ＋ Add notes
+        </button>
       )}
 
       <div className="card-meta">

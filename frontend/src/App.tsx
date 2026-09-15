@@ -150,6 +150,8 @@ export default function App() {
               tasks={filtered}
               tags={data.tags}
               onStatusChange={(id, status) => void data.moveTask(id, status)}
+              onTitleChange={(id, title) => void data.patchTask(id, { title })}
+              onContextChange={(id, context) => void data.patchTask(id, { context })}
               onDayChange={(id, day) => void data.moveTaskDay(id, day)}
               onDueChange={(id, due) => void data.patchTask(id, { due_date: due })}
               onTagsChange={(id, tags) => void data.patchTask(id, { tags })}

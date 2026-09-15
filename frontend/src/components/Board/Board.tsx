@@ -1,6 +1,7 @@
 import {
   DndContext,
   PointerSensor,
+  pointerWithin,
   useSensor,
   useSensors,
   type DragEndEvent,
@@ -66,7 +67,7 @@ export function Board({
   };
 
   return (
-    <DndContext sensors={sensors} onDragEnd={handleDragEnd}>
+    <DndContext sensors={sensors} collisionDetection={pointerWithin} onDragEnd={handleDragEnd}>
       <div className="board">
         {tasks.length === 0 && (
           <div className="empty-state">No tasks match the current filters.</div>

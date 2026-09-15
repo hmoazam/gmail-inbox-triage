@@ -7,10 +7,13 @@ cd "$(dirname "$0")"
 
 DATABRICKS_PROFILE="${CLEANUP_DATABRICKS_PROFILE:-DEFAULT}"
 
-echo "🔐 Refreshing Google auth (Gmail)..."
+echo "🔐 Refreshing Google auth (Gmail + Drive)..."
 gcloud auth application-default login \
   --scopes="https://www.googleapis.com/auth/gmail.modify,\
 https://www.googleapis.com/auth/gmail.settings.basic,\
+https://www.googleapis.com/auth/gmail.send,\
+https://www.googleapis.com/auth/drive.file,\
+https://www.googleapis.com/auth/drive.readonly,\
 https://www.googleapis.com/auth/cloud-platform,\
 https://www.googleapis.com/auth/userinfo.email,\
 https://www.googleapis.com/auth/userinfo.profile,\

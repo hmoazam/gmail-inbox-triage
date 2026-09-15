@@ -1,0 +1,12 @@
+node_modules
+dist
+dist-ssr
+*.local
+.vite
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+.DS_Store
+
+# TypeScript incremental build cache
+*.tsbuildinfo

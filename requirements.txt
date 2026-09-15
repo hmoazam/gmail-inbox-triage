@@ -1,7 +1,11 @@
 # Local Gmail inbox triage tool
 streamlit>=1.30
 requests>=2.31
-mlflow>=2.14
+
+# React + FastAPI migration: backend API (serves the built frontend in prod).
+fastapi>=0.110
+uvicorn[standard]>=0.27
+pydantic>=2.5
 
 # Default backend "claude_cli": Claude Code SDK driving the local `claude` CLI.
 claude-agent-sdk>=0.1.0
@@ -12,3 +16,9 @@ openai>=1.30
 
 # Fallback backend "anthropic_api": direct Anthropic API (needs ANTHROPIC_API_KEY).
 anthropic>=0.40
+
+# Optional: Drive transcript ingestion — soft dependencies (graceful fallback if absent).
+# PDF text extraction (drive_client.read_file_text for .pdf files).
+pdfminer.six>=20221105
+# .docx text extraction (drive_client.read_file_text for Word documents).
+python-docx>=1.1.0

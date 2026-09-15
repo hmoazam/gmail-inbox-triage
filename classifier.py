@@ -1,10 +1,16 @@
-"""Classify inbox threads using Claude.
+"""Classify inbox threads using Claude, and extract action items from transcripts.
 
 Each thread is evaluated as a whole conversation: Claude reads the full
 transcript (every message, full bodies) and decides, from the point of view of
 the account owner (set via CLEANUP_USER_NAME), whether the thread needs a response,
 whether it carries a concrete action on the owner, whether it's customer-related
 or purely internal, and which UI bucket it belongs in.
+
+Additionally exposes:
+  - extract_actions_from_transcript(text, roster, workstreams, settings) → list[dict]
+    Extracts action items from a meeting transcript or notes.
+  - thread_decision_to_task(decision, thread, settings) → Task | None
+    Bridge: converts an action_required ThreadDecision into a Task for the board.
 
 Backends (see config.py):
   - "claude_cli"    : Claude Agent SDK (Claude Code SDK) driving the local
@@ -18,9 +24,15 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
+import os
 import re
 
-from models import EmailThread, ThreadDecision, CATEGORIES, CATEGORY_OTHER
+from models import (
+    EmailThread, ThreadDecision, CATEGORIES, CATEGORY_OTHER, TASK_SOURCE_SLACK,
+)
+
+log = logging.getLogger(__name__)
 
 
 def _system_prompt(settings: dict) -> str:
@@ -96,8 +108,12 @@ def _extract_json_object(text: str) -> dict:
     return {}
 
 
-def _coerce(raw: dict, thread: EmailThread) -> ThreadDecision:
-    """Map a raw dict to a ThreadDecision, enforcing invariants safely."""
+def _coerce_fields(raw: dict, thread_id: str) -> ThreadDecision:
+    """Map a raw model dict to a ThreadDecision, enforcing invariants safely.
+
+    Shared by the email (``_coerce``) and Slack (``_coerce_slack``) paths — the
+    only difference between them is where the id comes from.
+    """
     action = raw.get("action_on_me")
     if isinstance(action, str) and action.strip().lower() in ("", "null", "none"):
         action = None
@@ -116,7 +132,7 @@ def _coerce(raw: dict, thread: EmailThread) -> ThreadDecision:
         category = "useful"
 
     return ThreadDecision(
-        thread_id=thread.thread_id,
+        thread_id=thread_id,
         category=category,
         customer_related=bool(raw.get("customer_related", False)),
         internal_only=bool(raw.get("internal_only", False)),
@@ -125,6 +141,11 @@ def _coerce(raw: dict, thread: EmailThread) -> ThreadDecision:
         summary=str(raw.get("summary", "")).strip(),
         confidence=float(raw.get("confidence", 0.0) or 0.0),
     )
+
+
+def _coerce(raw: dict, thread: EmailThread) -> ThreadDecision:
+    """Map a raw dict to a ThreadDecision, enforcing invariants safely."""
+    return _coerce_fields(raw, thread.thread_id)
 
 
 def _safe_default(thread: EmailThread, reason: str) -> ThreadDecision:
@@ -166,6 +187,16 @@ class UsageStats:
 async def _via_cli(system: str, user: str, model: str) -> tuple[str, int, int, float | None]:
     from claude_agent_sdk import query, ClaudeAgentOptions
     from claude_agent_sdk.types import AssistantMessage, TextBlock, ResultMessage
+
+    # The claude_cli backend authenticates through the user's claude.ai login,
+    # not an API key. If ANTHROPIC_API_KEY / ANTHROPIC_AUTH_TOKEN are present in
+    # the environment (commonly exported from a shell profile), the spawned
+    # `claude` CLI uses them instead of the login and prints:
+    #   "claude.ai connectors are disabled because ANTHROPIC_API_KEY ... is set"
+    # The SDK builds the child env as {**os.environ, **options.env}, a merge that
+    # can't *unset* an inherited key — so we drop them from os.environ here.
+    for _auth_var in ("ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN"):
+        os.environ.pop(_auth_var, None)
 
     opts: dict = {"system_prompt": system, "max_turns": 1, "allowed_tools": []}
     if model:
@@ -260,16 +291,6 @@ def classify_thread(thread: EmailThread, settings: dict,
     else:
         decision = _coerce(raw, thread)
 
-    # Log span to active MLflow run if one is open (best-effort, never raises).
-    try:
-        import mlflow
-        if mlflow.active_run():
-            from mlflow_tracking import log_thread_span
-            log_thread_span(thread, decision, in_tok, out_tok, cost,
-                            quick_triaged=False)
-    except Exception:
-        pass
-
     return decision
 
 
@@ -311,18 +332,6 @@ def classify_threads(threads: list[EmailThread], settings: dict,
                 needs_claude.append(th)
 
     instant_count = len(decisions)
-    needs_claude_ids = {th.thread_id for th in needs_claude}
-
-    # Log quick-triaged + cache-hit spans to MLflow (best-effort).
-    try:
-        import mlflow
-        if mlflow.active_run():
-            from mlflow_tracking import log_thread_span
-            for th in threads:
-                if th.thread_id in decisions and th.thread_id not in needs_claude_ids:
-                    log_thread_span(th, decisions[th.thread_id], quick_triaged=True)
-    except Exception:
-        pass
 
     if progress:
         progress(instant_count, len(threads), instant_count, 0)
@@ -338,3 +347,364 @@ def classify_threads(threads: list[EmailThread], settings: dict,
 
     # Return in original order.
     return [decisions[th.thread_id] for th in threads], stats
+
+
+# ── transcript action extraction ─────────────────────────────────────────────
+
+def _extract_json_array(text: str) -> list:
+    """Pull the first top-level JSON array out of the model's reply.
+
+    Mirrors _extract_json_object but expects a `[...]` root rather than `{...}`.
+    Returns [] on any parse failure so callers always get a list.
+    """
+    try:
+        val = json.loads(text.strip())
+        if isinstance(val, list):
+            return val
+    except Exception:
+        pass
+
+    # Fenced code block
+    fenced = re.search(r"```(?:json)?\s*(\[.*?\])\s*```", text, re.DOTALL)
+    if fenced:
+        try:
+            val = json.loads(fenced.group(1))
+            if isinstance(val, list):
+                return val
+        except Exception:
+            pass
+
+    # Bare array anywhere in the text
+    start = text.find("[")
+    end = text.rfind("]")
+    if start != -1 and end != -1 and end > start:
+        try:
+            val = json.loads(text[start:end + 1])
+            if isinstance(val, list):
+                return val
+        except Exception:
+            pass
+
+    return []
+
+
+def _action_system_prompt(name: str, roster: list[str], workstreams: list[str]) -> str:
+    roster_str = ", ".join(roster) if roster else "unknown"
+    ws_str = ", ".join(workstreams) if workstreams else "unassigned"
+    return (
+        f"You are an action-item extractor for {name}. "
+        "Given a meeting transcript or notes, identify every concrete commitment, "
+        "decision, or task that requires follow-up by someone on the team. "
+        "For each item, determine:\n"
+        f"- \"assignee\": match the responsible person's name against the roster "
+        f"({roster_str}), or use \"unknown\" if unclear.\n"
+        f"- \"workstream\": suggest the best matching workstream from "
+        f"({ws_str}), or use \"unassigned\" if it doesn't fit.\n"
+        "- \"action\": state the task as one concise imperative sentence.\n"
+        "- \"due_date\": ISO date string (YYYY-MM-DD) if a deadline is mentioned, "
+        "otherwise null.\n"
+        "- \"context\": 1–2 sentences quoted or paraphrased from the transcript "
+        "that support the action item.\n\n"
+        "Rules:\n"
+        "- Only include items with a real follow-up obligation — not general "
+        "discussion points.\n"
+        "- If no action items exist, return an empty array.\n"
+        "- Ambiguous assignees land in \"unknown\" rather than being guessed.\n"
+        "- Ambiguous workstreams land in \"unassigned\" rather than being guessed.\n\n"
+        "Return ONLY a JSON array; no surrounding text, no markdown prose:\n"
+        '[{"assignee":"...","workstream":"...","action":"...","due_date":null,'
+        '"context":"..."}, ...]'
+    )
+
+
+def _action_user_prompt(text: str, per_msg_body_chars: int) -> str:
+    # Allow larger transcripts than individual email bodies (5x per-msg cap).
+    cap = per_msg_body_chars * 5
+    snippet = text[:cap]
+    if len(text) > cap:
+        snippet += f"\n\n[transcript truncated at {cap} chars]"
+    return (
+        "Extract all action items from the following transcript. "
+        "Return the JSON array only.\n\n"
+        + snippet
+    )
+
+
+def extract_actions_from_transcript(
+    text: str,
+    roster: list[str],
+    workstreams: list[str],
+    settings: dict,
+) -> list[dict]:
+    """Extract action items from a meeting transcript or notes.
+
+    Args:
+        text:        Raw transcript text (Meet auto-notes, Teams export, .txt, etc.).
+        roster:      List of team member names for assignee matching.
+                     Derive from config via [r["name"] for r in TEAM_ROSTER].
+        workstreams: List of known workstream names for classification.
+        settings:    The app settings dict from config.get_settings().
+
+    Returns a list of dicts, each with keys:
+        assignee   — matched roster name or "unknown"
+        workstream — matched workstream or "unassigned"
+        action     — imperative sentence describing the task
+        due_date   — "YYYY-MM-DD" string or null
+        context    — 1–2 sentence excerpt providing context
+
+    Never raises — returns [] on any error (safe default).
+    Auth-like errors are re-raised so the caller can surface them to the user.
+    """
+    if not text or not text.strip():
+        return []
+
+    name = settings.get("user_name") or settings.get("user_email") or "the account owner"
+    system = _action_system_prompt(name, roster, workstreams)
+    user = _action_user_prompt(text, settings.get("per_msg_body_chars", 6000))
+    backend = settings.get("backend", "claude_cli")
+    model = settings.get("model", "")
+
+    try:
+        if backend == "databricks_fm":
+            raw_text, _, _, _ = _via_databricks_fm(
+                system, user, model, settings["databricks_profile"]
+            )
+        elif backend == "anthropic_api":
+            key = settings.get("anthropic_api_key")
+            if not key:
+                raise RuntimeError(
+                    "CLEANUP_BACKEND=anthropic_api but ANTHROPIC_API_KEY is not set."
+                )
+            raw_text, _, _, _ = _via_anthropic(system, user, model, key)
+        else:  # claude_cli (default)
+            raw_text, _, _, _ = asyncio.run(_via_cli(system, user, model))
+    except Exception as exc:
+        msg = str(exc)
+        if any(k in type(exc).__name__ + msg for k in
+               ("Auth", "401", "403", "Permission", "Credential", "Unauthorized")):
+            raise
+        log.warning(
+            "extract_actions_from_transcript: backend error (%s: %s) — returning [].",
+            type(exc).__name__, msg,
+        )
+        return []
+
+    items = _extract_json_array(raw_text)
+    if not items:
+        log.warning(
+            "extract_actions_from_transcript: could not parse action array from "
+            "model reply — returning []."
+        )
+        return []
+
+    # Normalise each item: enforce required keys and safe defaults.
+    cleaned: list[dict] = []
+    for item in items:
+        if not isinstance(item, dict):
+            continue
+        action_text = str(item.get("action") or "").strip()
+        if not action_text:
+            continue  # Skip items without a real action text
+        cleaned.append({
+            "assignee":   str(item.get("assignee") or "unknown").strip() or "unknown",
+            "workstream": str(item.get("workstream") or "unassigned").strip() or "unassigned",
+            "action":     action_text,
+            "due_date":   item.get("due_date"),   # None or "YYYY-MM-DD" string
+            "context":    str(item.get("context") or "").strip(),
+        })
+    return cleaned
+
+
+# ── email → Task bridge ───────────────────────────────────────────────────────
+
+def thread_decision_to_task(
+    decision: "ThreadDecision",
+    thread: "EmailThread",
+    settings: dict,
+) -> "Task | None":
+    """Convert an action_required ThreadDecision into a Task for the board.
+
+    Returns None if the decision is not action_required or has no action_on_me.
+    Does NOT persist the task — the caller is responsible for calling
+    task_store.add(task) after dedup-checking via task_store.find_by_source().
+
+    The Task is built via task_store.new_task() so it gets a UUID + timestamps.
+    Assignee is always the account owner (Hanna), since action_on_me means it's
+    her action. Workstream defaults to "unassigned" for manual classification on
+    the board.
+    """
+    if decision.category != "action_required" or not decision.action_on_me:
+        return None
+
+    from task_store import new_task  # deferred import to avoid circular at module load
+
+    assignee = (
+        settings.get("user_name")
+        or settings.get("user_email")
+        or "Hanna"
+    )
+    thread_id = decision.thread_id
+    source_link = f"https://mail.google.com/mail/u/0/#inbox/{thread_id}"
+
+    return new_task(
+        title=decision.action_on_me,
+        assignee=assignee,
+        workstream="unassigned",
+        status="todo",
+        source="email",
+        source_ref=thread_id,
+        source_link=source_link,
+        context=decision.summary or "",
+        customer_related=decision.customer_related,
+        confidence=decision.confidence,
+    )
+
+
+# ── Slack classification ──────────────────────────────────────────────────────
+
+def _slack_system_prompt(settings: dict) -> str:
+    name = settings["user_name"] or settings.get("user_email") or "the account owner"
+    domain = settings.get("internal_domain") or "the company"
+    return f"""You are a Slack triage assistant for {name}. You are given ONE \
+Slack conversation — either a direct message or a channel — showing the UNREAD \
+messages in order (oldest first). Messages sent by {name} are marked \
+"From: ME". Analyze the conversation and return a single JSON object describing it.
+
+Decide these fields:
+
+- "customer_related": true if the conversation involves an external customer, \
+prospect, partner, or their use case / deal / support. false if it does not.
+- "internal_only": true if it is a purely internal discussion (colleagues at \
+{domain}) with no external customer participating. A conversation can be \
+internal_only and still be customer_related (an internal discussion ABOUT a customer).
+- "needs_response": true if the LATEST state of the conversation is waiting on a \
+reply from someone. Consider who sent the last message and what it asked.
+- "action_on_me": if there is a concrete action, decision, or reply required \
+specifically from {name}, write it as one short imperative sentence (e.g. \
+"Reply to Alice with the Q3 architecture doc"). If {name} has already handled it, \
+or the action is on someone else, or there is no action, set this to null.
+- "category": exactly one of:
+    - "action_required": there IS an outstanding action on {name} (action_on_me \
+is not null).
+    - "useful": no action on {name}, but worth being aware of.
+    - "other": everything else — noise, bots, notifications with no value.
+- "summary": one short sentence describing the conversation.
+- "confidence": 0.0-1.0.
+
+Rules:
+- Be precise about action_on_me: only flag a real action on {name}, not on others.
+- If action_on_me is null, category MUST be "useful" or "other".
+- If action_on_me is non-null, category MUST be "action_required".
+
+Return ONLY the JSON object, no surrounding text:
+{{"customer_related": bool, "internal_only": bool, "needs_response": bool, \
+"action_on_me": "..." or null, "category": "action_required|useful|other", \
+"summary": "...", "confidence": 0.0}}"""
+
+
+def _slack_transcript(conv, per_msg_chars: int) -> str:
+    """Readable transcript of a Slack conversation's unread messages."""
+    lines = [f"Conversation: {conv.name}  ({conv.kind})", ""]
+    for i, m in enumerate(conv.messages, 1):
+        lines.append(f"--- Message {i}/{len(conv.messages)} ---")
+        lines.append(f"From: {m.author}")
+        lines.append(f"Time: {m.ts}")
+        lines.append("")
+        lines.append((m.text or "").strip()[:per_msg_chars])
+        lines.append("")
+    return "\n".join(lines)
+
+
+def _slack_safe_default(conv, reason: str) -> ThreadDecision:
+    return ThreadDecision(
+        thread_id=conv.id, category=CATEGORY_OTHER, summary=reason, confidence=0.0,
+    )
+
+
+def classify_slack_conversation(conv, settings: dict,
+                                stats: "UsageStats | None" = None) -> ThreadDecision:
+    """Classify a single Slack conversation into a ThreadDecision-shaped result.
+
+    Reuses the same backend plumbing (_via_cli / _via_databricks_fm /
+    _via_anthropic) as the email path. ``conv`` is the normalized
+    ``slack_client.SlackConversation`` (duck-typed: ``.id``, ``.name``,
+    ``.kind``, ``.messages`` with ``.author`` / ``.ts`` / ``.text``).
+
+    Never raises except on auth-like errors (re-raised so the route returns
+    401/403); any other failure returns a safe "other" default.
+    """
+    system = _slack_system_prompt(settings)
+    user = ("Here is the Slack conversation. Classify it and return the JSON "
+            "object only.\n\n" + _slack_transcript(conv, settings["per_msg_body_chars"]))
+    backend, model = settings["backend"], settings["model"]
+    try:
+        if backend == "databricks_fm":
+            text, in_tok, out_tok, cost = _via_databricks_fm(
+                system, user, model, settings["databricks_profile"])
+        elif backend == "anthropic_api":
+            key = settings.get("anthropic_api_key")
+            if not key:
+                raise RuntimeError("CLEANUP_BACKEND=anthropic_api but ANTHROPIC_API_KEY is not set.")
+            text, in_tok, out_tok, cost = _via_anthropic(system, user, model, key)
+        else:  # claude_cli (default)
+            text, in_tok, out_tok, cost = asyncio.run(_via_cli(system, user, model))
+    except Exception as exc:  # noqa: BLE001
+        msg = str(exc)
+        if any(k in type(exc).__name__ + msg for k in
+               ("Auth", "401", "403", "Permission", "Credential", "Unauthorized")):
+            raise
+        return _slack_safe_default(conv, f"Classification unavailable ({type(exc).__name__}).")
+
+    if stats is not None:
+        stats.add(in_tok, out_tok, cost)
+
+    raw = _extract_json_object(text)
+    if not raw:
+        return _slack_safe_default(conv, "Could not parse classification; treated as other.")
+    return _coerce_fields(raw, conv.id)
+
+
+# ── Slack → Task bridge ───────────────────────────────────────────────────────
+
+def slack_conversation_to_task(
+    *,
+    channel_id: str,
+    name: str,
+    permalink: str | None,
+    summary: str,
+    action_on_me: str | None,
+    customer_related: bool,
+    confidence: float,
+    settings: dict,
+    assignee: str | None = None,
+    workstream: str | None = None,
+    tags: list[str] | None = None,
+) -> "Task":
+    """Bridge a triaged Slack conversation into a board Task.
+
+    Title is ``action_on_me`` if present, else the ``summary``, else the
+    conversation ``name``. Source is ``TASK_SOURCE_SLACK``; ``source_ref`` is the
+    channel id (the dedup key alongside the title); ``source_link`` is the
+    permalink. Assignee defaults to the account owner.
+
+    Does NOT persist — the caller dedup-checks via
+    ``task_store.find_by_source("slack", channel_id, task.title)`` and then adds.
+    """
+    from task_store import new_task  # deferred import to avoid circular at module load
+
+    owner = settings.get("user_name") or settings.get("user_email") or "Hanna"
+    title = (action_on_me or "").strip() or (summary or "").strip() or name
+
+    return new_task(
+        title=title,
+        assignee=(assignee or "").strip() or owner,
+        workstream=(workstream or "").strip() or "unassigned",
+        status="todo",
+        source=TASK_SOURCE_SLACK,
+        source_ref=channel_id,
+        source_link=permalink or None,
+        context=summary or "",
+        customer_related=customer_related,
+        confidence=confidence,
+        tags=tags or [],
+    )

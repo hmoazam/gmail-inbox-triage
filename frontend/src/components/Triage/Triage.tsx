@@ -124,7 +124,7 @@ export function Triage({ onAuth, onAddedToBoard }: Props) {
         </label>
         <label className="checkbox" style={{ flexDirection: "row", alignItems: "center", gap: 5 }}>
           <input type="checkbox" checked={cap} onChange={(e) => setCap(e.target.checked)} />
-          Cap results
+          Limit # of threads (off = all unread)
         </label>
         {cap && (
           <label>

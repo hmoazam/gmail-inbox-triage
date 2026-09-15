@@ -36,7 +36,9 @@ def triage(
     settings = get_app_settings()
     client = get_gmail_client()
 
-    cap = max_results if (max_results and max_results > 0) else settings["thread_batch_size"]
+    # No max_results (or <= 0) means fetch ALL unread threads (list_inbox_threads
+    # paginates through everything when given None). A positive value caps it.
+    cap = max_results if (max_results and max_results > 0) else None
 
     ids = client.list_inbox_threads(max_results=cap, query=query)  # AuthError → 401/403
     if not ids:

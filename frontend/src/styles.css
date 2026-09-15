@@ -387,6 +387,57 @@ button {
   text-decoration: underline;
 }
 
+/* ---- Done section (completed-task log below the board) ---- */
+.done-section {
+  margin-top: 18px;
+  border-top: 1px solid var(--border);
+  padding-top: 10px;
+}
+.done-header {
+  background: none;
+  border: none;
+  color: var(--text-muted);
+  font-weight: 700;
+  font-size: 13px;
+  cursor: pointer;
+  padding: 4px 0;
+}
+.done-header:hover {
+  color: var(--accent);
+}
+.done-list {
+  list-style: none;
+  margin: 8px 0 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.done-row {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+  padding: 6px 8px;
+  background: var(--surface-2);
+  border-radius: var(--radius);
+  font-size: 13px;
+}
+.done-row-title {
+  font-weight: 600;
+  text-decoration: line-through;
+  color: var(--text-muted);
+}
+.done-row-date {
+  color: var(--text-muted);
+  font-size: 12px;
+}
+.done-row-actions {
+  margin-left: auto;
+  display: flex;
+  gap: 6px;
+}
+
 .card-meta {
   display: flex;
   flex-wrap: wrap;

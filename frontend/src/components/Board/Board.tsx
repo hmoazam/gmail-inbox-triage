@@ -1,3 +1,4 @@
+import { useState } from "react";
 import {
   DndContext,
   PointerSensor,
@@ -16,6 +17,7 @@ import {
 } from "../../types";
 import { Column, type ColumnKey } from "./Column";
 import { Card } from "./Card";
+import { TagChip } from "../Tags/TagChip";
 
 interface Props {
   tasks: Task[]; // already filtered
@@ -53,10 +55,19 @@ export function Board({
   // Require a small drag distance so a click on the handle doesn't misfire.
   const sensors = useSensors(useSensor(PointerSensor, { activationConstraint: { distance: 4 } }));
 
+  const [showDone, setShowDone] = useState(false);
+
+  // Day columns show only ACTIVE (non-done) tasks; completed ones collect in the
+  // Done section below, newest-completed first.
+  const activeTasks = tasks.filter((t) => t.status !== "done");
+  const doneTasks = tasks
+    .filter((t) => t.status === "done")
+    .sort((a, b) => (b.completed_at ?? "").localeCompare(a.completed_at ?? ""));
+
   const tasksForColumn = (key: ColumnKey): Task[] =>
     key === "backlog"
-      ? tasks.filter((t) => t.planned_day == null)
-      : tasks.filter((t) => t.planned_day === key);
+      ? activeTasks.filter((t) => t.planned_day == null)
+      : activeTasks.filter((t) => t.planned_day === key);
 
   const handleDragEnd = (event: DragEndEvent) => {
     const { active, over } = event;
@@ -100,6 +111,57 @@ export function Board({
             );
           })}
         </div>
+
+        <section className="done-section">
+          <button
+            type="button"
+            className="done-header"
+            onClick={() => setShowDone((v) => !v)}
+            aria-expanded={showDone}
+          >
+            {showDone ? "▾" : "▸"} ✓ Done ({doneTasks.length})
+          </button>
+          {showDone &&
+            (doneTasks.length === 0 ? (
+              <div className="column-empty">No completed tasks yet.</div>
+            ) : (
+              <ul className="done-list">
+                {doneTasks.map((t) => (
+                  <li key={t.id} className="done-row">
+                    <span className="done-row-title">{t.title}</span>
+                    {t.completed_at && (
+                      <span className="done-row-date" title={t.completed_at}>
+                        ✓ {new Date(t.completed_at).toLocaleDateString()}
+                      </span>
+                    )}
+                    <span className="badge" title="Owner">👤 {t.assignee}</span>
+                    <span className="badge" title="Workstream">🗂️ {t.workstream}</span>
+                    {t.tags.map((name) => (
+                      <TagChip key={name} name={name} tags={tags} />
+                    ))}
+                    <span className="done-row-actions">
+                      <button
+                        type="button"
+                        className="btn btn-sm"
+                        onClick={() => onStatusChange(t.id, "todo")}
+                        title="Move back to active"
+                      >
+                        ↩ Reopen
+                      </button>
+                      <button
+                        type="button"
+                        className="btn btn-sm btn-danger"
+                        onClick={() => onDelete(t.id)}
+                        title="Delete"
+                      >
+                        🗑️
+                      </button>
+                    </span>
+                  </li>
+                ))}
+              </ul>
+            ))}
+        </section>
       </div>
     </DndContext>
   );

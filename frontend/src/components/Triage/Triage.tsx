@@ -61,6 +61,16 @@ export function Triage({ onAuth, onAddedToBoard }: Props) {
       return next;
     });
 
+  // Bulk select/clear all threads in one bucket (section).
+  const toggleBucket = (ids: string[]) =>
+    setSelected((prev) => {
+      const next = new Set(prev);
+      const allSelected = ids.length > 0 && ids.every((id) => next.has(id));
+      if (allSelected) ids.forEach((id) => next.delete(id));
+      else ids.forEach((id) => next.add(id));
+      return next;
+    });
+
   const toggleExpand = (id: string) =>
     setExpanded((prev) => {
       const next = new Set(prev);
@@ -163,6 +173,16 @@ export function Triage({ onAuth, onAddedToBoard }: Props) {
           return (
             <div className="triage-bucket" key={cat}>
               <div className="triage-bucket-header">
+                {items.length > 0 && (
+                  <input
+                    type="checkbox"
+                    className="bucket-select-all"
+                    checked={items.every((t) => selected.has(t.thread_id))}
+                    onChange={() => toggleBucket(items.map((t) => t.thread_id))}
+                    title="Select / clear all in this section"
+                    aria-label={`Select all ${TRIAGE_CATEGORY_LABELS[cat]}`}
+                  />
+                )}
                 {meta.icon} {TRIAGE_CATEGORY_LABELS[cat]}{" "}
                 <span className="muted" style={{ fontWeight: 400 }}>
                   ({items.length})

@@ -163,9 +163,11 @@ export default function App() {
         </>
       )}
 
-      {tab === "triage" && (
+      {/* Kept mounted (hidden when inactive) so fetched/classified threads persist
+          across tab switches — you only re-fetch when you choose to. */}
+      <div style={{ display: tab === "triage" ? undefined : "none" }}>
         <Triage onAuth={setNotice} onAddedToBoard={() => void data.refreshTasks()} />
-      )}
+      </div>
 
       {tab === "slack" && (
         <SlackTriage

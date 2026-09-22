@@ -438,6 +438,13 @@ button {
   gap: 6px;
 }
 
+/* Per-section "select all" checkbox in the triage bucket headers. */
+.bucket-select-all {
+  margin-right: 6px;
+  vertical-align: middle;
+  cursor: pointer;
+}
+
 .card-meta {
   display: flex;
   flex-wrap: wrap;

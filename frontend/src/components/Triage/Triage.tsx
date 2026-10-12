@@ -31,6 +31,7 @@ export function Triage({ onAuth, onAddedToBoard }: Props) {
   const [maxResults, setMaxResults] = useState(30);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [warning, setWarning] = useState<string | null>(null);
   const [hasFetched, setHasFetched] = useState(false);
 
   const handleErr = (err: unknown) => {
@@ -41,9 +42,17 @@ export function Triage({ onAuth, onAddedToBoard }: Props) {
   const fetchThreads = async () => {
     setLoading(true);
     setError(null);
+    setWarning(null);
     try {
       const res = await api.fetchTriage({ query, maxResults: cap ? maxResults : undefined });
       setThreads(res.threads);
+      const failed = res.usage?.failed ?? 0;
+      if (failed > 0) {
+        setWarning(
+          `${failed} thread(s) could not be classified and are shown under Other — ` +
+            `re-run to retry them. First error: ${res.usage?.first_error ?? "unknown"}`,
+        );
+      }
       setSelected(new Set());
       setHasFetched(true);
     } catch (err) {
@@ -159,6 +168,7 @@ export function Triage({ onAuth, onAddedToBoard }: Props) {
       </div>
 
       {error && <div className="banner banner-error">{error}</div>}
+      {warning && <div className="banner banner-error">{warning}</div>}
 
       {!hasFetched && !loading && (
         <div className="empty-state">

@@ -27,6 +27,7 @@ import json
 import logging
 import os
 import re
+import shutil
 
 from models import (
     EmailThread, ThreadDecision, CATEGORIES, CATEGORY_OTHER, TASK_SOURCE_SLACK,
@@ -155,6 +156,15 @@ def _safe_default(thread: EmailThread, reason: str) -> ThreadDecision:
     )
 
 
+def is_failed_decision(decision: ThreadDecision) -> bool:
+    """True for a _safe_default placeholder (Claude never actually classified it).
+
+    These must never be cached — otherwise a transient backend failure files the
+    thread under "other" permanently and it silently disappears from triage.
+    """
+    return decision.confidence == 0.0 and decision.category == CATEGORY_OTHER
+
+
 # --- usage stats ------------------------------------------------------------
 
 class UsageStats:
@@ -164,6 +174,8 @@ class UsageStats:
         self.output_tokens: int = 0
         self.cost_usd: float | None = None   # None when backend doesn't report USD
         self.claude_calls: int = 0           # threads that went to Claude (not quick-triage)
+        self.failed: int = 0                 # Claude calls that errored / didn't parse
+        self.first_error: str | None = None  # surfaced in the UI so failures aren't silent
 
     def add(self, input_tok: int, output_tok: int, cost: float | None) -> None:
         self.input_tokens += input_tok
@@ -179,6 +191,8 @@ class UsageStats:
             "total_tokens": self.input_tokens + self.output_tokens,
             "cost_usd": self.cost_usd,
             "claude_calls": self.claude_calls,
+            "failed": self.failed,
+            "first_error": self.first_error,
         }
 
 
@@ -198,9 +212,25 @@ async def _via_cli(system: str, user: str, model: str) -> tuple[str, int, int, f
     for _auth_var in ("ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN"):
         os.environ.pop(_auth_var, None)
 
-    opts: dict = {"system_prompt": system, "max_turns": 1, "allowed_tools": []}
+    # Isolated, text-only session: no MCP servers, plugins, or hooks. Otherwise
+    # every classified thread spawns the user's full MCP fleet (Genie, Glean,
+    # Slack, ...) and each failing OAuth proxy pops a browser auth window.
+    opts: dict = {
+        "system_prompt": system,
+        "max_turns": 1,
+        "allowed_tools": [],
+        "mcp_servers": {},
+        "strict_mcp_config": True,
+        "setting_sources": [],
+    }
     if model:
         opts["model"] = model
+    # Prefer the user's installed (auto-updating) `claude` over the SDK's bundled
+    # copy: the bundled CLI goes stale and the API then rejects it with
+    # "Claude Code X does not support this model; version Y or newer is required".
+    cli = shutil.which("claude")
+    if cli:
+        opts["cli_path"] = cli
     options = ClaudeAgentOptions(**opts)
 
     chunks: list[str] = []
@@ -215,6 +245,10 @@ async def _via_cli(system: str, user: str, model: str) -> tuple[str, int, int, f
                 input_tok  = message.usage.get("input_tokens", 0)
                 output_tok = message.usage.get("output_tokens", 0)
         elif isinstance(message, ResultMessage):
+            if message.is_error:
+                # The SDK follows this with an opaque "error result: success"
+                # exception; raise the CLI's actual error text instead.
+                raise RuntimeError(f"claude CLI error: {message.result}")
             cost = message.total_cost_usd
             if message.usage:
                 input_tok  = message.usage.get("input_tokens", input_tok)
@@ -280,6 +314,10 @@ def classify_thread(thread: EmailThread, settings: dict,
         if any(k in type(exc).__name__ + msg for k in
                ("Auth", "401", "403", "Permission", "Credential", "Unauthorized")):
             raise
+        log.warning("classify_thread %s failed: %s", thread.thread_id, exc)
+        if stats is not None:
+            stats.failed += 1
+            stats.first_error = stats.first_error or str(exc)[:300]
         return _safe_default(thread, f"Classification unavailable ({type(exc).__name__}).")
 
     if stats is not None:
@@ -287,6 +325,9 @@ def classify_thread(thread: EmailThread, settings: dict,
 
     raw = _extract_json_object(text)
     if not raw:
+        if stats is not None:
+            stats.failed += 1
+            stats.first_error = stats.first_error or f"Unparseable response: {text[:200]}"
         decision = _safe_default(thread, "Could not parse classification; treated as other.")
     else:
         decision = _coerce(raw, thread)
@@ -340,7 +381,8 @@ def classify_threads(threads: list[EmailThread], settings: dict,
     for i, th in enumerate(needs_claude, 1):
         decision = classify_thread(th, settings, stats=stats)
         decisions[th.thread_id] = decision
-        decision_cache.put(th, decision)
+        if not is_failed_decision(decision):
+            decision_cache.put(th, decision)
         done = instant_count + i
         if progress:
             progress(done, len(threads), instant_count, i)

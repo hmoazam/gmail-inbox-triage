@@ -56,9 +56,12 @@ def get(thread: EmailThread) -> ThreadDecision | None:
     if entry.get("fingerprint") != _fingerprint(thread):
         return None  # thread changed (e.g. new reply) — cache is stale
     try:
-        return ThreadDecision(**entry["decision"])
+        decision = ThreadDecision(**entry["decision"])
     except Exception:
         return None
+    # Ignore failure placeholders cached by older versions — re-classify instead.
+    from classifier import is_failed_decision
+    return None if is_failed_decision(decision) else decision
 
 
 def put(thread: EmailThread, decision: ThreadDecision) -> None:

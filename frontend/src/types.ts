@@ -153,7 +153,7 @@ export interface TriageThread {
 
 export interface TriageResponse {
   threads: TriageThread[];
-  usage?: Record<string, unknown>;
+  usage?: { failed?: number; first_error?: string | null } & Record<string, unknown>;
 }
 
 /** Request body for POST /api/triage/add-to-board — the thread's decision fields. */

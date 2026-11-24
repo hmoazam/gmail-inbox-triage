@@ -18,7 +18,9 @@ The first matching rule wins.
 from __future__ import annotations
 
 import re
-from models import EmailThread, ThreadDecision, CATEGORY_OTHER, CATEGORY_USEFUL
+from models import (
+    EmailThread, ThreadDecision, CATEGORY_OTHER, CATEGORY_USEFUL, SUBCATEGORY_OTHER_FYI,
+)
 from config import INTERNAL_DOMAIN
 
 # ─── rule table ─────────────────────────────────────────────────────────────
@@ -136,6 +138,7 @@ def quick_triage(thread: EmailThread) -> ThreadDecision | None:
                 action_on_me=rule.get("action_on_me"),
                 summary=rule["summary"],
                 confidence=0.95,
+                subcategory=SUBCATEGORY_OTHER_FYI if rule["category"] == CATEGORY_USEFUL else None,
             )
 
     # Newsletters: any thread with a List-Unsubscribe header and no personal reply

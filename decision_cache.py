@@ -21,7 +21,7 @@ from pathlib import Path
 
 log = logging.getLogger(__name__)
 
-from models import EmailThread, ThreadDecision
+from models import CATEGORY_USEFUL, EmailThread, ThreadDecision
 
 STORE_PATH = Path.home() / ".gmail_triage_cache.json"
 
@@ -61,7 +61,12 @@ def get(thread: EmailThread) -> ThreadDecision | None:
         return None
     # Ignore failure placeholders cached by older versions — re-classify instead.
     from classifier import is_failed_decision
-    return None if is_failed_decision(decision) else decision
+    if is_failed_decision(decision):
+        return None
+    # Useful decisions cached before subcategories existed — re-classify to get one.
+    if decision.category == CATEGORY_USEFUL and decision.subcategory is None:
+        return None
+    return decision
 
 
 def put(thread: EmailThread, decision: ThreadDecision) -> None:

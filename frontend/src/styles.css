@@ -596,6 +596,15 @@ button {
   color: var(--accent);
 }
 
+.triage-subgroup {
+  margin: 0 0 12px 12px;
+}
+.triage-subgroup-toggle {
+  font-size: 13px;
+  font-weight: 600;
+  margin-bottom: 6px;
+}
+
 .triage-bucket-sub {
   color: var(--text-muted);
   font-size: 12px;

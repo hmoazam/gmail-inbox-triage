@@ -4,6 +4,8 @@ import {
   ApiError,
   TRIAGE_CATEGORIES,
   TRIAGE_CATEGORY_LABELS,
+  USEFUL_SUBCATEGORIES,
+  USEFUL_SUBCATEGORY_LABELS,
   type TriageCategory,
   type TriageThread,
 } from "../../types";
@@ -26,7 +28,8 @@ export function Triage({ onAuth, onAddedToBoard }: Props) {
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [added, setAdded] = useState<Set<string>>(new Set());
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
-  const [collapsed, setCollapsed] = useState<Set<TriageCategory>>(new Set());
+  // Keys: a TriageCategory, or "useful:<subcategory>" for a Useful subgroup.
+  const [collapsed, setCollapsed] = useState<Set<string>>(new Set());
   const [query, setQuery] = useState("in:inbox is:unread");
   const [cap, setCap] = useState(false);
   const [maxResults, setMaxResults] = useState(30);
@@ -89,11 +92,11 @@ export function Triage({ onAuth, onAddedToBoard }: Props) {
       return next;
     });
 
-  const toggleCollapsed = (cat: TriageCategory) =>
+  const toggleCollapsed = (key: string) =>
     setCollapsed((prev) => {
       const next = new Set(prev);
-      if (next.has(cat)) next.delete(cat);
-      else next.add(cat);
+      if (next.has(key)) next.delete(key);
+      else next.add(key);
       return next;
     });
 
@@ -135,6 +138,88 @@ export function Triage({ onAuth, onAddedToBoard }: Props) {
       handleErr(err);
     }
   };
+
+  const renderThread = (t: TriageThread, cat: TriageCategory) => (
+    <div className="thread" key={t.thread_id}>
+      <input
+        type="checkbox"
+        checked={selected.has(t.thread_id)}
+        onChange={() => toggleSel(t.thread_id)}
+        aria-label="select thread"
+      />
+      <div className="thread-body">
+        <div className="thread-subject">
+          {t.unread ? "🔵 " : ""}
+          {t.subject || "(no subject)"}
+        </div>
+        <div className="muted" style={{ fontSize: 12 }}>
+          {t.participants.slice(0, 4).join(", ")}
+          {t.participants.length > 4 ? ` +${t.participants.length - 4}` : ""}
+          {t.message_count > 0
+            ? `${t.participants.length ? "  ·  " : ""}${t.message_count} msg${
+                t.message_count === 1 ? "" : "s"
+              }`
+            : ""}
+        </div>
+        {cat === "action_required" && t.decision.action_on_me && (
+          <div className="thread-action">🚨 Action: {t.decision.action_on_me}</div>
+        )}
+        {t.decision.summary && (
+          <div className="thread-summary">
+            💬 {t.decision.summary}
+            {t.decision.confidence
+              ? `  ·  ${Math.round(t.decision.confidence * 100)}%`
+              : ""}
+          </div>
+        )}
+        <div className="card-meta">
+          {t.decision.customer_related && <span className="badge">🧑‍💼 Customer</span>}
+          {t.decision.internal_only && <span className="badge">🏢 Internal</span>}
+          {t.decision.needs_response && <span className="badge">↩️ Needs response</span>}
+          {t.source_link && (
+            <a
+              className="card-link"
+              href={t.source_link}
+              target="_blank"
+              rel="noreferrer"
+            >
+              ↗ Open in Gmail
+            </a>
+          )}
+        </div>
+        {cat === "action_required" && (
+          <div>
+            <button
+              className="btn btn-sm btn-primary"
+              disabled={added.has(t.thread_id)}
+              onClick={() => void addToBoard(t)}
+            >
+              {added.has(t.thread_id) ? "✓ Added" : "📋 Add to board"}
+            </button>
+          </div>
+        )}
+        <button
+          className="btn btn-sm"
+          style={{ alignSelf: "flex-start" }}
+          onClick={() => toggleExpand(t.thread_id)}
+        >
+          {expanded.has(t.thread_id) ? "Hide" : "Read thread"}
+        </button>
+        {expanded.has(t.thread_id) &&
+          (() => {
+            // Derive last-message from/date from messages[].
+            const last = t.messages[t.messages.length - 1];
+            return (
+              <div className="thread-preview">
+                {last?.sender ? `From: ${last.sender}\n` : ""}
+                {last?.date ? `Date: ${last.date}\n\n` : ""}
+                {t.decision.summary || "No preview available."}
+              </div>
+            );
+          })()}
+      </div>
+    </div>
+  );
 
   const byCategory = (c: TriageCategory) => threads.filter((t) => t.decision.category === c);
 
@@ -217,87 +302,33 @@ export function Triage({ onAuth, onAddedToBoard }: Props) {
               </div>
               {!isCollapsed && <div className="triage-bucket-sub">{meta.sub}</div>}
               {!isCollapsed && items.length === 0 && <div className="muted">Nothing here.</div>}
-              {!isCollapsed && items.map((t) => (
-                <div className="thread" key={t.thread_id}>
-                  <input
-                    type="checkbox"
-                    checked={selected.has(t.thread_id)}
-                    onChange={() => toggleSel(t.thread_id)}
-                    aria-label="select thread"
-                  />
-                  <div className="thread-body">
-                    <div className="thread-subject">
-                      {t.unread ? "🔵 " : ""}
-                      {t.subject || "(no subject)"}
-                    </div>
-                    <div className="muted" style={{ fontSize: 12 }}>
-                      {t.participants.slice(0, 4).join(", ")}
-                      {t.participants.length > 4 ? ` +${t.participants.length - 4}` : ""}
-                      {t.message_count > 0
-                        ? `${t.participants.length ? "  ·  " : ""}${t.message_count} msg${
-                            t.message_count === 1 ? "" : "s"
-                          }`
-                        : ""}
-                    </div>
-                    {cat === "action_required" && t.decision.action_on_me && (
-                      <div className="thread-action">🚨 Action: {t.decision.action_on_me}</div>
-                    )}
-                    {t.decision.summary && (
-                      <div className="thread-summary">
-                        💬 {t.decision.summary}
-                        {t.decision.confidence
-                          ? `  ·  ${Math.round(t.decision.confidence * 100)}%`
-                          : ""}
-                      </div>
-                    )}
-                    <div className="card-meta">
-                      {t.decision.customer_related && <span className="badge">🧑‍💼 Customer</span>}
-                      {t.decision.internal_only && <span className="badge">🏢 Internal</span>}
-                      {t.decision.needs_response && <span className="badge">↩️ Needs response</span>}
-                      {t.source_link && (
-                        <a
-                          className="card-link"
-                          href={t.source_link}
-                          target="_blank"
-                          rel="noreferrer"
-                        >
-                          ↗ Open in Gmail
-                        </a>
-                      )}
-                    </div>
-                    {cat === "action_required" && (
-                      <div>
-                        <button
-                          className="btn btn-sm btn-primary"
-                          disabled={added.has(t.thread_id)}
-                          onClick={() => void addToBoard(t)}
-                        >
-                          {added.has(t.thread_id) ? "✓ Added" : "📋 Add to board"}
-                        </button>
-                      </div>
-                    )}
-                    <button
-                      className="btn btn-sm"
-                      style={{ alignSelf: "flex-start" }}
-                      onClick={() => toggleExpand(t.thread_id)}
-                    >
-                      {expanded.has(t.thread_id) ? "Hide" : "Read thread"}
-                    </button>
-                    {expanded.has(t.thread_id) &&
-                      (() => {
-                        // Derive last-message from/date from messages[].
-                        const last = t.messages[t.messages.length - 1];
-                        return (
-                          <div className="thread-preview">
-                            {last?.sender ? `From: ${last.sender}\n` : ""}
-                            {last?.date ? `Date: ${last.date}\n\n` : ""}
-                            {t.decision.summary || "No preview available."}
-                          </div>
-                        );
-                      })()}
-                  </div>
-                </div>
-              ))}
+              {!isCollapsed &&
+                (cat === "useful"
+                  ? USEFUL_SUBCATEGORIES.map((sub) => {
+                      const subItems = items.filter(
+                        (t) => (t.decision.subcategory ?? "other_fyi") === sub,
+                      );
+                      if (subItems.length === 0) return null;
+                      const key = `useful:${sub}`;
+                      const subCollapsed = collapsed.has(key);
+                      return (
+                        <div className="triage-subgroup" key={sub}>
+                          <button
+                            type="button"
+                            className="triage-bucket-toggle triage-subgroup-toggle"
+                            onClick={() => toggleCollapsed(key)}
+                            aria-expanded={!subCollapsed}
+                          >
+                            {subCollapsed ? "▸" : "▾"} {USEFUL_SUBCATEGORY_LABELS[sub]}{" "}
+                            <span className="muted" style={{ fontWeight: 400 }}>
+                              ({subItems.length})
+                            </span>
+                          </button>
+                          {!subCollapsed && subItems.map((t) => renderThread(t, cat))}
+                        </div>
+                      );
+                    })
+                  : items.map((t) => renderThread(t, cat)))}
             </div>
           );
         })}

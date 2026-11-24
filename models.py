@@ -72,6 +72,19 @@ CATEGORY_USEFUL = "useful"
 CATEGORY_OTHER = "other"
 CATEGORIES = (CATEGORY_ACTION, CATEGORY_USEFUL, CATEGORY_OTHER)
 
+# Subcategories within "useful", in the order the UI renders them. Only set when
+# category == "useful"; None otherwise. SUBCATEGORY_OTHER_FYI is the fallback.
+SUBCATEGORY_OTHER_FYI = "other_fyi"
+USEFUL_SUBCATEGORIES = (
+    "customer",       # customer / account FYIs: threads already handled, ASQs, field alerts
+    "meeting_notes",  # Gemini notes, recaps, slides/recordings from meetings
+    "product",        # product launches, GA/beta, retirements, roadmap, PRISM changes
+    "org",            # org/team announcements, enablement, events, HR, office
+    "schedule",       # meetings moved / cancelled / accepted, no action needed
+    "admin",          # travel bookings, logistics, recognition, personal admin
+    SUBCATEGORY_OTHER_FYI,
+)
+
 
 @dataclass
 class ThreadDecision:
@@ -84,6 +97,7 @@ class ThreadDecision:
     action_on_me: str | None = None  # concrete action for the account owner, else None
     summary: str = ""                # one-line why / what it is
     confidence: float = 0.0
+    subcategory: str | None = None   # USEFUL_SUBCATEGORIES value when category == "useful"
 
     def as_dict(self) -> dict:
         return asdict(self)

@@ -30,7 +30,8 @@ import re
 import shutil
 
 from models import (
-    EmailThread, ThreadDecision, CATEGORIES, CATEGORY_OTHER, TASK_SOURCE_SLACK,
+    EmailThread, ThreadDecision, CATEGORIES, CATEGORY_OTHER, CATEGORY_USEFUL,
+    SUBCATEGORY_OTHER_FYI, USEFUL_SUBCATEGORIES, TASK_SOURCE_SLACK,
 )
 
 log = logging.getLogger(__name__)
@@ -65,6 +66,21 @@ is not null, typically needs_response). These go to the top of the inbox.
     - "useful": no action on {name}, but worth being aware of — product updates, \
 announcements, or customer threads that have already been actioned/FYI.
     - "other": everything else — bulk mail, noise, notifications with no value.
+- "subcategory": ONLY when category is "useful", exactly one of (else null):
+    - "customer": customer/account FYIs — customer threads already actioned, \
+ASQ/support-request status notices, field alerts or updates about a specific account.
+    - "meeting_notes": meeting notes, auto-generated (e.g. Gemini) notes, recaps, \
+slides or recordings from a meeting.
+    - "product": product launches, GA/beta/preview news, retirements, roadmap or \
+product-team (e.g. PRISM) changes.
+    - "org": org/team announcements, new joiners, enablement sessions, events, \
+marketing roundups, HR or office updates.
+    - "schedule": a meeting was moved, cancelled, accepted or declined and \
+{name} has nothing to do.
+    - "admin": travel bookings and tickets, logistics, access/login details, \
+recognition, personal admin.
+    - "other_fyi": worth knowing but fits none of the above.
+  If a thread fits several, prefer the first matching option in this list.
 - "summary": one short sentence. For action_required, describe the situation; \
 for useful, say why it's worth knowing; for other, why it's noise.
 - "confidence": 0.0-1.0.
@@ -77,7 +93,7 @@ Rules:
 Return ONLY the JSON object, no surrounding text:
 {{"customer_related": bool, "internal_only": bool, "needs_response": bool, \
 "action_on_me": "..." or null, "category": "action_required|useful|other", \
-"summary": "...", "confidence": 0.0}}"""
+"subcategory": "..." or null, "summary": "...", "confidence": 0.0}}"""
 
 
 def _user_prompt(thread: EmailThread, settings: dict) -> str:
@@ -132,6 +148,13 @@ def _coerce_fields(raw: dict, thread_id: str) -> ThreadDecision:
         # claimed action_required but gave no action -> demote to useful
         category = "useful"
 
+    # Subcategory only applies to useful; unknown/missing values fall back to other_fyi.
+    subcategory = None
+    if category == CATEGORY_USEFUL:
+        subcategory = str(raw.get("subcategory") or "").lower()
+        if subcategory not in USEFUL_SUBCATEGORIES:
+            subcategory = SUBCATEGORY_OTHER_FYI
+
     return ThreadDecision(
         thread_id=thread_id,
         category=category,
@@ -141,6 +164,7 @@ def _coerce_fields(raw: dict, thread_id: str) -> ThreadDecision:
         action_on_me=action,
         summary=str(raw.get("summary", "")).strip(),
         confidence=float(raw.get("confidence", 0.0) or 0.0),
+        subcategory=subcategory,
     )
 
 

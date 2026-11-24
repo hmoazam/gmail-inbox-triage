@@ -36,6 +36,28 @@ export const TRIAGE_CATEGORY_LABELS: Record<TriageCategory, string> = {
   other: "Other",
 };
 
+// Subgroups within "useful", in render order (models.py USEFUL_SUBCATEGORIES).
+export const USEFUL_SUBCATEGORIES = [
+  "customer",
+  "meeting_notes",
+  "product",
+  "org",
+  "schedule",
+  "admin",
+  "other_fyi",
+] as const;
+export type UsefulSubcategory = (typeof USEFUL_SUBCATEGORIES)[number];
+
+export const USEFUL_SUBCATEGORY_LABELS: Record<UsefulSubcategory, string> = {
+  customer: "🤝 Customers & accounts",
+  meeting_notes: "📝 Meeting notes & recaps",
+  product: "🚀 Product & platform updates",
+  org: "🏢 Org, team & events",
+  schedule: "📅 Schedule changes",
+  admin: "🧳 Travel & admin",
+  other_fyi: "📎 Other FYI",
+};
+
 /**
  * One Action Board task. Mirrors models.py `Task.as_dict()` plus the derived
  * `overdue` flag and the new `tags` list.
@@ -123,6 +145,7 @@ export interface ThreadDecision {
   internal_only: boolean;
   needs_response: boolean;
   confidence: number;
+  subcategory?: UsefulSubcategory | null; // set only when category === "useful"
 }
 
 /** One message within a triage thread (mirrors backend ThreadMessageOut). */

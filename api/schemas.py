@@ -140,6 +140,7 @@ class ThreadDecisionOut(BaseModel):
     action_on_me: str | None = None
     summary: str = ""
     confidence: float = 0.0
+    subcategory: str | None = None
 
     @classmethod
     def from_decision(cls, d: ThreadDecision) -> "ThreadDecisionOut":

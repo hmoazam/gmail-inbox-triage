@@ -72,8 +72,21 @@ CATEGORY_USEFUL = "useful"
 CATEGORY_OTHER = "other"
 CATEGORIES = (CATEGORY_ACTION, CATEGORY_USEFUL, CATEGORY_OTHER)
 
-# Subcategories within "useful", in the order the UI renders them. Only set when
-# category == "useful"; None otherwise. SUBCATEGORY_OTHER_FYI is the fallback.
+# Subcategories within "action_required", grouped by the kind of action, in the
+# order the UI renders them. SUBCATEGORY_OTHER_ACTION is the fallback.
+SUBCATEGORY_OTHER_ACTION = "other_action"
+ACTION_SUBCATEGORIES = (
+    "reply",              # someone is waiting on a reply / answer from me
+    "meeting_followups",  # follow-ups assigned in meeting notes (e.g. Gemini notes)
+    "schedule",           # accept / decline / RSVP / set up a meeting
+    "requests",           # ASQs, Brickroad issues, preview enrolments, approvals
+    "alerts",             # platform/customer alerts needing action (limits, retirements)
+    "admin",              # perf reviews, surveys, mandates, HR, travel/visa paperwork
+    SUBCATEGORY_OTHER_ACTION,
+)
+
+# Subcategories within "useful", in the order the UI renders them.
+# SUBCATEGORY_OTHER_FYI is the fallback.
 SUBCATEGORY_OTHER_FYI = "other_fyi"
 USEFUL_SUBCATEGORIES = (
     "customer",       # customer / account FYIs: threads already handled, ASQs, field alerts
@@ -84,6 +97,13 @@ USEFUL_SUBCATEGORIES = (
     "admin",          # travel bookings, logistics, recognition, personal admin
     SUBCATEGORY_OTHER_FYI,
 )
+
+# Categories that have subcategories -> (allowed values, fallback). A decision in
+# one of these categories always carries a subcategory; any other category has None.
+SUBCATEGORIES = {
+    CATEGORY_ACTION: (ACTION_SUBCATEGORIES, SUBCATEGORY_OTHER_ACTION),
+    CATEGORY_USEFUL: (USEFUL_SUBCATEGORIES, SUBCATEGORY_OTHER_FYI),
+}
 
 
 @dataclass
@@ -97,7 +117,7 @@ class ThreadDecision:
     action_on_me: str | None = None  # concrete action for the account owner, else None
     summary: str = ""                # one-line why / what it is
     confidence: float = 0.0
-    subcategory: str | None = None   # USEFUL_SUBCATEGORIES value when category == "useful"
+    subcategory: str | None = None   # from SUBCATEGORIES[category], else None
 
     def as_dict(self) -> dict:
         return asdict(self)

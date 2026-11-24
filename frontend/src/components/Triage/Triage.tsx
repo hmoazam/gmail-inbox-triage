@@ -4,8 +4,7 @@ import {
   ApiError,
   TRIAGE_CATEGORIES,
   TRIAGE_CATEGORY_LABELS,
-  USEFUL_SUBCATEGORIES,
-  USEFUL_SUBCATEGORY_LABELS,
+  TRIAGE_SUBCATEGORIES,
   type TriageCategory,
   type TriageThread,
 } from "../../types";
@@ -28,7 +27,7 @@ export function Triage({ onAuth, onAddedToBoard }: Props) {
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [added, setAdded] = useState<Set<string>>(new Set());
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
-  // Keys: a TriageCategory, or "useful:<subcategory>" for a Useful subgroup.
+  // Keys: a TriageCategory, or "<category>:<subcategory>" for a subgroup.
   const [collapsed, setCollapsed] = useState<Set<string>>(new Set());
   const [query, setQuery] = useState("in:inbox is:unread");
   const [cap, setCap] = useState(false);
@@ -275,6 +274,7 @@ export function Triage({ onAuth, onAddedToBoard }: Props) {
           const items = byCategory(cat);
           const meta = CATEGORY_META[cat];
           const isCollapsed = collapsed.has(cat);
+          const subs = TRIAGE_SUBCATEGORIES[cat];
           return (
             <div className="triage-bucket" key={cat}>
               <div className="triage-bucket-header">
@@ -303,13 +303,15 @@ export function Triage({ onAuth, onAddedToBoard }: Props) {
               {!isCollapsed && <div className="triage-bucket-sub">{meta.sub}</div>}
               {!isCollapsed && items.length === 0 && <div className="muted">Nothing here.</div>}
               {!isCollapsed &&
-                (cat === "useful"
-                  ? USEFUL_SUBCATEGORIES.map((sub) => {
-                      const subItems = items.filter(
-                        (t) => (t.decision.subcategory ?? "other_fyi") === sub,
-                      );
+                (subs
+                  ? subs.order.map((sub) => {
+                      const fallback = subs.order[subs.order.length - 1];
+                      const subItems = items.filter((t) => {
+                        const s = t.decision.subcategory;
+                        return (s && subs.order.includes(s) ? s : fallback) === sub;
+                      });
                       if (subItems.length === 0) return null;
-                      const key = `useful:${sub}`;
+                      const key = `${cat}:${sub}`;
                       const subCollapsed = collapsed.has(key);
                       return (
                         <div className="triage-subgroup" key={sub}>
@@ -319,7 +321,7 @@ export function Triage({ onAuth, onAddedToBoard }: Props) {
                             onClick={() => toggleCollapsed(key)}
                             aria-expanded={!subCollapsed}
                           >
-                            {subCollapsed ? "▸" : "▾"} {USEFUL_SUBCATEGORY_LABELS[sub]}{" "}
+                            {subCollapsed ? "▸" : "▾"} {subs.labels[sub]}{" "}
                             <span className="muted" style={{ fontWeight: 400 }}>
                               ({subItems.length})
                             </span>

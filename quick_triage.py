@@ -19,7 +19,7 @@ from __future__ import annotations
 
 import re
 from models import (
-    EmailThread, ThreadDecision, CATEGORY_OTHER, CATEGORY_USEFUL, SUBCATEGORY_OTHER_FYI,
+    EmailThread, ThreadDecision, CATEGORY_OTHER, CATEGORY_USEFUL, SUBCATEGORIES,
 )
 from config import INTERNAL_DOMAIN
 
@@ -138,7 +138,8 @@ def quick_triage(thread: EmailThread) -> ThreadDecision | None:
                 action_on_me=rule.get("action_on_me"),
                 summary=rule["summary"],
                 confidence=0.95,
-                subcategory=SUBCATEGORY_OTHER_FYI if rule["category"] == CATEGORY_USEFUL else None,
+                # Rules can't tell subcategories apart — use the category's catch-all.
+                subcategory=SUBCATEGORIES.get(rule["category"], (None, None))[1],
             )
 
     # Newsletters: any thread with a List-Unsubscribe header and no personal reply

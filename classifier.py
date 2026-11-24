@@ -30,8 +30,8 @@ import re
 import shutil
 
 from models import (
-    EmailThread, ThreadDecision, CATEGORIES, CATEGORY_OTHER, CATEGORY_USEFUL,
-    SUBCATEGORY_OTHER_FYI, USEFUL_SUBCATEGORIES, TASK_SOURCE_SLACK,
+    EmailThread, ThreadDecision, CATEGORIES, CATEGORY_OTHER,
+    SUBCATEGORIES, TASK_SOURCE_SLACK,
 )
 
 log = logging.getLogger(__name__)
@@ -66,7 +66,24 @@ is not null, typically needs_response). These go to the top of the inbox.
     - "useful": no action on {name}, but worth being aware of — product updates, \
 announcements, or customer threads that have already been actioned/FYI.
     - "other": everything else — bulk mail, noise, notifications with no value.
-- "subcategory": ONLY when category is "useful", exactly one of (else null):
+- "subcategory": when category is "action_required", the kind of action — \
+exactly one of:
+    - "requests": the action is on a tracked request — an ASQ / assistance \
+request (AR-…), Brickroad issue (ISS-…), Salesforce approval or Chatter post, \
+or preview enrolment to approve. Use this even if the action is a reply.
+    - "meeting_followups": the thread is meeting notes (e.g. Gemini auto-notes) \
+or a recap that assigns {name} follow-ups.
+    - "alerts": an automated platform or field alert that needs {name} to act \
+(limits hit, model/feature retirements, firewall/IP changes, migrations), \
+including telling a customer about it.
+    - "schedule": accept, decline, RSVP to, reschedule or set up a meeting.
+    - "admin": perf reviews and feedback, surveys, nominations, account-plan or \
+leadership mandates, HR, travel or visa paperwork.
+    - "reply": someone is waiting on a reply, answer, document or decision from \
+{name} and none of the above apply.
+    - "other_action": fits none of the above.
+  Check them in this order and pick the first that fits.
+- "subcategory": when category is "useful", exactly one of:
     - "customer": customer/account FYIs — customer threads already actioned, \
 ASQ/support-request status notices, field alerts or updates about a specific account.
     - "meeting_notes": meeting notes, auto-generated (e.g. Gemini) notes, recaps, \
@@ -81,6 +98,7 @@ marketing roundups, HR or office updates.
 recognition, personal admin.
     - "other_fyi": worth knowing but fits none of the above.
   If a thread fits several, prefer the first matching option in this list.
+- For category "other", "subcategory" is null.
 - "summary": one short sentence. For action_required, describe the situation; \
 for useful, say why it's worth knowing; for other, why it's noise.
 - "confidence": 0.0-1.0.
@@ -148,12 +166,13 @@ def _coerce_fields(raw: dict, thread_id: str) -> ThreadDecision:
         # claimed action_required but gave no action -> demote to useful
         category = "useful"
 
-    # Subcategory only applies to useful; unknown/missing values fall back to other_fyi.
+    # Unknown/missing subcategories fall back to the category's catch-all.
     subcategory = None
-    if category == CATEGORY_USEFUL:
+    if category in SUBCATEGORIES:
+        allowed, fallback = SUBCATEGORIES[category]
         subcategory = str(raw.get("subcategory") or "").lower()
-        if subcategory not in USEFUL_SUBCATEGORIES:
-            subcategory = SUBCATEGORY_OTHER_FYI
+        if subcategory not in allowed:
+            subcategory = fallback
 
     return ThreadDecision(
         thread_id=thread_id,

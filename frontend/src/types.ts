@@ -36,6 +36,28 @@ export const TRIAGE_CATEGORY_LABELS: Record<TriageCategory, string> = {
   other: "Other",
 };
 
+// Subgroups within "action_required", in render order (models.py ACTION_SUBCATEGORIES).
+export const ACTION_SUBCATEGORIES = [
+  "reply",
+  "meeting_followups",
+  "schedule",
+  "requests",
+  "alerts",
+  "admin",
+  "other_action",
+] as const;
+export type ActionSubcategory = (typeof ACTION_SUBCATEGORIES)[number];
+
+export const ACTION_SUBCATEGORY_LABELS: Record<ActionSubcategory, string> = {
+  reply: "💬 Replies owed",
+  meeting_followups: "📝 Meeting follow-ups",
+  schedule: "📅 Invites & scheduling",
+  requests: "🎫 ASQs, issues & approvals",
+  alerts: "⚠️ Alerts to act on",
+  admin: "🗂️ Admin, perf & HR",
+  other_action: "📌 Other actions",
+};
+
 // Subgroups within "useful", in render order (models.py USEFUL_SUBCATEGORIES).
 export const USEFUL_SUBCATEGORIES = [
   "customer",
@@ -56,6 +78,17 @@ export const USEFUL_SUBCATEGORY_LABELS: Record<UsefulSubcategory, string> = {
   schedule: "📅 Schedule changes",
   admin: "🧳 Travel & admin",
   other_fyi: "📎 Other FYI",
+};
+
+/**
+ * Buckets that render as subgroups -> ordered subgroups + labels. The last entry
+ * is the catch-all that threads with a missing/unknown subcategory fall into.
+ */
+export const TRIAGE_SUBCATEGORIES: Partial<
+  Record<TriageCategory, { order: readonly string[]; labels: Record<string, string> }>
+> = {
+  action_required: { order: ACTION_SUBCATEGORIES, labels: ACTION_SUBCATEGORY_LABELS },
+  useful: { order: USEFUL_SUBCATEGORIES, labels: USEFUL_SUBCATEGORY_LABELS },
 };
 
 /**
@@ -145,7 +178,7 @@ export interface ThreadDecision {
   internal_only: boolean;
   needs_response: boolean;
   confidence: number;
-  subcategory?: UsefulSubcategory | null; // set only when category === "useful"
+  subcategory?: ActionSubcategory | UsefulSubcategory | null; // see TRIAGE_SUBCATEGORIES
 }
 
 /** One message within a triage thread (mirrors backend ThreadMessageOut). */

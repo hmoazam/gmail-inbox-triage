@@ -26,6 +26,7 @@ export function Triage({ onAuth, onAddedToBoard }: Props) {
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [added, setAdded] = useState<Set<string>>(new Set());
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
+  const [collapsed, setCollapsed] = useState<Set<TriageCategory>>(new Set());
   const [query, setQuery] = useState("in:inbox is:unread");
   const [cap, setCap] = useState(false);
   const [maxResults, setMaxResults] = useState(30);
@@ -85,6 +86,14 @@ export function Triage({ onAuth, onAddedToBoard }: Props) {
       const next = new Set(prev);
       if (next.has(id)) next.delete(id);
       else next.add(id);
+      return next;
+    });
+
+  const toggleCollapsed = (cat: TriageCategory) =>
+    setCollapsed((prev) => {
+      const next = new Set(prev);
+      if (next.has(cat)) next.delete(cat);
+      else next.add(cat);
       return next;
     });
 
@@ -180,6 +189,7 @@ export function Triage({ onAuth, onAddedToBoard }: Props) {
         TRIAGE_CATEGORIES.map((cat) => {
           const items = byCategory(cat);
           const meta = CATEGORY_META[cat];
+          const isCollapsed = collapsed.has(cat);
           return (
             <div className="triage-bucket" key={cat}>
               <div className="triage-bucket-header">
@@ -193,14 +203,21 @@ export function Triage({ onAuth, onAddedToBoard }: Props) {
                     aria-label={`Select all ${TRIAGE_CATEGORY_LABELS[cat]}`}
                   />
                 )}
-                {meta.icon} {TRIAGE_CATEGORY_LABELS[cat]}{" "}
-                <span className="muted" style={{ fontWeight: 400 }}>
-                  ({items.length})
-                </span>
+                <button
+                  type="button"
+                  className="triage-bucket-toggle"
+                  onClick={() => toggleCollapsed(cat)}
+                  aria-expanded={!isCollapsed}
+                >
+                  {isCollapsed ? "▸" : "▾"} {meta.icon} {TRIAGE_CATEGORY_LABELS[cat]}{" "}
+                  <span className="muted" style={{ fontWeight: 400 }}>
+                    ({items.length})
+                  </span>
+                </button>
               </div>
-              <div className="triage-bucket-sub">{meta.sub}</div>
-              {items.length === 0 && <div className="muted">Nothing here.</div>}
-              {items.map((t) => (
+              {!isCollapsed && <div className="triage-bucket-sub">{meta.sub}</div>}
+              {!isCollapsed && items.length === 0 && <div className="muted">Nothing here.</div>}
+              {!isCollapsed && items.map((t) => (
                 <div className="thread" key={t.thread_id}>
                   <input
                     type="checkbox"
